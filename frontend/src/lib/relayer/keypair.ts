@@ -2,7 +2,7 @@ import "server-only";
 
 import bs58 from "bs58";
 import { Keypair } from "@solana/web3.js";
-import { assertNoForbiddenPublicSecrets, getServerHeliusRpcUrl } from "@/lib/server-env";
+import { assertNoForbiddenPublicSecrets, getPrimarySolanaRpcUrl } from "@/lib/server-env";
 
 let cachedRelayerKeypair: Keypair | null = null;
 
@@ -31,5 +31,5 @@ export function isRelayEnabled(): boolean {
 }
 
 export function getRelayRpcUrl(): string {
-  return getServerHeliusRpcUrl();
+  return getPrimarySolanaRpcUrl();
 }

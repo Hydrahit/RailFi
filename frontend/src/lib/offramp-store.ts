@@ -1,6 +1,8 @@
 import "server-only";
 
 import { createHash, randomUUID } from "crypto";
+import { Prisma } from "@prisma/client";
+import { db } from "@/lib/db";
 import { getServerRedis } from "@/lib/upstash";
 import type {
   OfframpDeadLetterRecord,
@@ -15,6 +17,10 @@ const OFFRAMP_TTL_SECONDS = 90 * 24 * 60 * 60;
 const DLQ_TTL_SECONDS = 7 * 24 * 60 * 60;
 const PROFILE_TTL_SECONDS = 365 * 24 * 60 * 60;
 const MAX_UPI_HANDLES = 3;
+
+function isDatabaseConfigured(): boolean {
+  return !!process.env.DATABASE_URL?.trim();
+}
 
 function getRedis() {
   return getServerRedis("offramp store");
@@ -126,7 +132,58 @@ export async function putOfframpRecord(record: OfframpRecord): Promise<void> {
     redis.zadd(walletIndexKey(record.walletAddress), { score: createdAtScore, member: record.transferId }),
     redis.expire(walletIndexKey(record.walletAddress), OFFRAMP_TTL_SECONDS),
     incrementUsageCounters(record.walletAddress, record.amountInr, record.createdAt),
+    mirrorOfframpRecord(record),
   ]);
+}
+
+async function mirrorOfframpRecord(record: OfframpRecord): Promise<void> {
+  if (!isDatabaseConfigured()) {
+    return;
+  }
+
+  await db.offrampTransaction.upsert({
+    where: { transferId: record.transferId },
+    create: {
+      transferId: record.transferId,
+      solanaTx: record.solanaTx,
+      cashfreeId: record.cashfreeId,
+      walletAddress: record.walletAddress,
+      amountUsdc: new Prisma.Decimal(record.amountUsdc),
+      amountInr: new Prisma.Decimal(record.amountInr),
+      amountMicroUsdc: record.amountMicroUsdc,
+      amountInrPaise: record.amountInrPaise,
+      upiMasked: record.upiMasked,
+      upiHash: record.upiHash ?? null,
+      status: record.status,
+      utr: record.utr,
+      requiresReview: record.requiresReview,
+      failureReason: record.failureReason ?? null,
+      retryCount: record.retryCount ?? 0,
+      lastRetryAt: record.lastRetryAt ? new Date(record.lastRetryAt) : null,
+      createdAt: new Date(record.createdAt),
+      completedAt: record.completedAt ? new Date(record.completedAt) : null,
+      referralPubkey: record.referralPubkey,
+    },
+    update: {
+      solanaTx: record.solanaTx,
+      cashfreeId: record.cashfreeId,
+      walletAddress: record.walletAddress,
+      amountUsdc: new Prisma.Decimal(record.amountUsdc),
+      amountInr: new Prisma.Decimal(record.amountInr),
+      amountMicroUsdc: record.amountMicroUsdc,
+      amountInrPaise: record.amountInrPaise,
+      upiMasked: record.upiMasked,
+      upiHash: record.upiHash ?? null,
+      status: record.status,
+      utr: record.utr,
+      requiresReview: record.requiresReview,
+      failureReason: record.failureReason ?? null,
+      retryCount: record.retryCount ?? 0,
+      lastRetryAt: record.lastRetryAt ? new Date(record.lastRetryAt) : null,
+      completedAt: record.completedAt ? new Date(record.completedAt) : null,
+      referralPubkey: record.referralPubkey,
+    },
+  });
 }
 
 async function incrementUsageCounters(
@@ -147,7 +204,40 @@ async function incrementUsageCounters(
 }
 
 export async function getOfframpRecord(transferId: string): Promise<OfframpRecord | null> {
-  return (await getRedis().get<OfframpRecord>(offrampKey(transferId))) ?? null;
+  const cached = (await getRedis().get<OfframpRecord>(offrampKey(transferId))) ?? null;
+  if (cached || !isDatabaseConfigured()) {
+    return cached;
+  }
+
+  const record = await db.offrampTransaction.findUnique({
+    where: { transferId },
+  });
+
+  if (!record) {
+    return null;
+  }
+
+  return {
+    transferId: record.transferId,
+    solanaTx: record.solanaTx,
+    cashfreeId: record.cashfreeId,
+    walletAddress: record.walletAddress,
+    amountUsdc: Number(record.amountUsdc),
+    amountMicroUsdc: record.amountMicroUsdc,
+    amountInr: Number(record.amountInr),
+    amountInrPaise: record.amountInrPaise,
+    upiMasked: record.upiMasked,
+    upiHash: record.upiHash,
+    status: record.status as OfframpStatus,
+    utr: record.utr,
+    createdAt: record.createdAt.toISOString(),
+    completedAt: record.completedAt?.toISOString() ?? null,
+    requiresReview: record.requiresReview,
+    failureReason: record.failureReason,
+    retryCount: record.retryCount,
+    lastRetryAt: record.lastRetryAt?.toISOString() ?? null,
+    referralPubkey: record.referralPubkey,
+  };
 }
 
 export async function updateOfframpRecord(
@@ -164,11 +254,18 @@ export async function updateOfframpRecord(
   return next;
 }
 
-export async function writeOfframpDeadLetter(transferId: string, payload: string): Promise<void> {
+export async function writeOfframpDeadLetter(
+  transferId: string,
+  payload: string,
+  provider?: string,
+  reason?: string | null,
+): Promise<void> {
   const record: OfframpDeadLetterRecord = {
     transferId,
     receivedAt: new Date().toISOString(),
     payload,
+    provider,
+    reason: reason ?? null,
   };
   await getRedis().setex(dlqKey(transferId), DLQ_TTL_SECONDS, record);
 }
@@ -190,7 +287,39 @@ export async function listWalletOfframpRecords(walletAddress: string, limit = 25
   }
 
   const records = await Promise.all(transferIds.map((transferId) => getOfframpRecord(transferId)));
-  return records.filter((record): record is OfframpRecord => !!record);
+  const hydrated = records.filter((record): record is OfframpRecord => !!record);
+
+  if (hydrated.length > 0 || !isDatabaseConfigured()) {
+    return hydrated;
+  }
+
+  const dbRecords = await db.offrampTransaction.findMany({
+    where: { walletAddress },
+    take: limit,
+    orderBy: { createdAt: "desc" },
+  });
+
+  return dbRecords.map((record) => ({
+    transferId: record.transferId,
+    solanaTx: record.solanaTx,
+    cashfreeId: record.cashfreeId,
+    walletAddress: record.walletAddress,
+    amountUsdc: Number(record.amountUsdc),
+    amountMicroUsdc: record.amountMicroUsdc,
+    amountInr: Number(record.amountInr),
+    amountInrPaise: record.amountInrPaise,
+    upiMasked: record.upiMasked,
+    upiHash: record.upiHash,
+    status: record.status as OfframpStatus,
+    utr: record.utr,
+    createdAt: record.createdAt.toISOString(),
+    completedAt: record.completedAt?.toISOString() ?? null,
+    requiresReview: record.requiresReview,
+    failureReason: record.failureReason,
+    retryCount: record.retryCount,
+    lastRetryAt: record.lastRetryAt?.toISOString() ?? null,
+    referralPubkey: record.referralPubkey,
+  }));
 }
 
 export async function listStoredUpiHandles(walletAddress: string): Promise<StoredUpiHandle[]> {

@@ -1,8 +1,11 @@
+import crypto from "crypto";
 import { Webhook } from "standardwebhooks";
+import { stageDodoIntentFromWebhook } from "@/lib/dodo-intents";
+import { publishWorkerJob, isQstashConfigured } from "@/lib/qstash";
 import { getServerRedis } from "@/lib/upstash";
+import { createRetryJob, ingestWebhookEvent, markWebhookFailed } from "@/lib/webhook-inbox";
 import type {
   DodoWebhookPayload,
-  DodoOfframpIntent,
 } from "@/types/dodo";
 
 export const runtime = "nodejs";
@@ -49,43 +52,57 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ received: true });
   }
 
-  const { payment_id, customer, amount, currency, created_at } = payload.data;
-
-  if (!payment_id || !customer?.email) {
-    console.error("[dodo/webhook] Malformed payment.succeeded payload", {
-      payment_id,
-    });
-    return Response.json({ received: true });
-  }
-
-  const redis = getRedis();
-  const redisKey = `railfi:dodo:intent:${payment_id}`;
-  const existing = await redis.get<DodoOfframpIntent>(redisKey);
-
-  if (existing !== null) {
-    console.info("[dodo/webhook] Duplicate event for payment_id, skipping", {
-      payment_id,
-    });
-    return Response.json({ received: true });
-  }
-
-  const intent: DodoOfframpIntent = {
-    dodoPaymentId: payment_id,
-    customerEmail: customer.email,
-    customerName: customer.name ?? "",
-    amountUsd: amount / 100,
-    currency,
-    status: "PENDING_WALLET_LINK",
-    createdAt: new Date(created_at).getTime(),
-  };
-
-  await redis.setex(redisKey, 3600, intent);
-
-  console.info("[dodo/webhook] Intent staged", {
-    payment_id,
-    amountUsd: intent.amountUsd,
-    email: intent.customerEmail,
+  const eventKey =
+    payload.data.payment_id?.trim() ||
+    payload.webhook_id?.trim() ||
+    request.headers.get("webhook-id")?.trim() ||
+    crypto.randomUUID();
+  const inbox = await ingestWebhookEvent({
+    provider: "dodo",
+    sourcePath: "/api/webhooks/dodo",
+    eventKey,
+    eventType: payload.event_type,
+    payload: payload as never,
   });
+
+  try {
+    if (isQstashConfigured() && inbox) {
+      await publishWorkerJob(
+        "dodo-webhook",
+        {
+          inboxId: inbox.id,
+          eventKey,
+        },
+        { retries: 5 },
+      );
+      await createRetryJob({
+        kind: "webhook-process",
+        resourceType: "webhook_inbox",
+        resourceId: inbox.id,
+        inboxId: inbox.id,
+        payload: { provider: "dodo", eventKey },
+      });
+    } else {
+      const { duplicate, intent } = await stageDodoIntentFromWebhook(payload);
+
+      if (duplicate) {
+        console.info("[dodo/webhook] Duplicate event for payment_id, skipping", { payment_id: payload.data.payment_id });
+      } else if (intent) {
+        console.info("[dodo/webhook] Intent staged inline", {
+          payment_id: intent.dodoPaymentId,
+          amountUsd: intent.amountUsd,
+          email: intent.customerEmail,
+        });
+      }
+    }
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Failed to enqueue Dodo webhook.";
+    if (inbox) {
+      await markWebhookFailed(inbox.id, message);
+    }
+    console.error("[dodo/webhook] Failed to ingest webhook", { eventKey, error });
+    return Response.json({ error: "Webhook ingestion failed" }, { status: 500 });
+  }
 
   return Response.json({ received: true });
 }

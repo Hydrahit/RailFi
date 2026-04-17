@@ -3,8 +3,9 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_DATABASE_URL")
 }
 
 model User {
@@ -38,26 +39,36 @@ model UpiHandle {
 
 model OfframpTransaction {
   id             String   @id @default(cuid())
+  transferId     String   @unique
   solanaTx       String   @unique
   cashfreeId     String   @unique
   walletAddress  String
   amountUsdc     Decimal
   amountInr      Decimal
+  amountMicroUsdc String
+  amountInrPaise Int
   upiMasked      String
+  upiHash        String?
   status         String   @default("STAGED")
   utr            String?
   requiresReview Boolean  @default(false)
+  failureReason  String?
+  retryCount     Int      @default(0)
+  lastRetryAt    DateTime?
   createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
   completedAt    DateTime?
+  referralPubkey String?
   userId         String?
   user           User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  payoutAttempts PayoutAttempt[]
 }
 
 model DodoSettlementAudit {
   id                 String    @id @default(cuid())
   dodoPaymentId      String    @unique
-  transferId         String    @unique
-  solanaTx           String    @unique
+  transferId         String?   @unique
+  solanaTx           String?   @unique
   walletAddress      String
   customerEmail      String
   customerName       String?
@@ -66,11 +77,68 @@ model DodoSettlementAudit {
   amountMicroUsdc    String
   inrQuotePaise      Int
   status             String
+  failureReason      String?
+  retryCount         Int       @default(0)
+  lastRetryAt        DateTime?
   executionLockToken String?
   executionStartedAt DateTime?
   executedAt         DateTime?
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
+}
+
+model WebhookInbox {
+  id             String    @id @default(cuid())
+  provider       String
+  sourcePath     String
+  eventKey       String    @unique
+  eventType      String
+  payload        Json
+  status         String    @default("RECEIVED")
+  attemptCount   Int       @default(0)
+  lastError      String?
+  deadLetteredAt DateTime?
+  receivedAt     DateTime  @default(now())
+  processedAt    DateTime?
+  updatedAt      DateTime  @updatedAt
+  retryJobs      RetryJob[]
+}
+
+model RetryJob {
+  id            String       @id @default(cuid())
+  kind          String
+  resourceType  String
+  resourceId    String
+  status        String       @default("QUEUED")
+  attemptCount  Int          @default(0)
+  maxAttempts   Int          @default(5)
+  nextRunAt     DateTime     @default(now())
+  lastAttemptAt DateTime?
+  lastError     String?
+  payload       Json?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  inboxId       String?
+  inbox         WebhookInbox? @relation(fields: [inboxId], references: [id], onDelete: SetNull)
+
+  @@index([status, nextRunAt])
+  @@index([resourceType, resourceId])
+}
+
+model PayoutAttempt {
+  id                 String               @id @default(cuid())
+  transferId         String
+  externalTransferId String               @unique
+  kind               String
+  rpcUrl             String?
+  status             String               @default("QUEUED")
+  errorReason        String?
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+  completedAt        DateTime?
+  transaction        OfframpTransaction   @relation(fields: [transferId], references: [transferId], onDelete: Cascade)
+
+  @@index([transferId, createdAt])
 }
 
 model Account {

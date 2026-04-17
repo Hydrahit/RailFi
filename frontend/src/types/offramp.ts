@@ -23,6 +23,9 @@ export interface OfframpRecord {
   createdAt: string;
   completedAt: string | null;
   requiresReview: boolean;
+  failureReason?: string | null;
+  retryCount?: number;
+  lastRetryAt?: string | null;
   referralPubkey: string | null;
 }
 
@@ -30,6 +33,8 @@ export interface OfframpDeadLetterRecord {
   transferId: string;
   receivedAt: string;
   payload: string;
+  provider?: string;
+  reason?: string | null;
 }
 
 export interface StoredUpiHandle {

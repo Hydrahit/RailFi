@@ -66,6 +66,41 @@ export function getServerHeliusRpcUrl(): string {
   return rpcUrl;
 }
 
+export function getAppUrl(): string {
+  assertNoForbiddenPublicSecrets();
+  const configured =
+    process.env.APP_URL?.trim() ??
+    process.env.NEXT_PUBLIC_APP_URL?.trim() ??
+    process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim() ??
+    process.env.VERCEL_URL?.trim();
+
+  if (!configured) {
+    throw new Error("APP_URL is not configured.");
+  }
+
+  return configured.startsWith("http") ? configured.replace(/\/$/, "") : `https://${configured.replace(/\/$/, "")}`;
+}
+
+export function getPrimarySolanaRpcUrl(): string {
+  assertNoForbiddenPublicSecrets();
+  return (
+    process.env.PRIMARY_SOLANA_RPC_URL?.trim() ??
+    process.env.HELIUS_RPC_URL?.trim() ??
+    process.env.SOLANA_RPC_URL?.trim() ??
+    clusterApiUrl("devnet")
+  );
+}
+
+export function getSecondarySolanaRpcUrl(): string | null {
+  assertNoForbiddenPublicSecrets();
+  return (
+    process.env.SECONDARY_SOLANA_RPC_URL?.trim() ??
+    process.env.QUICKNODE_RPC_URL?.trim() ??
+    process.env.TRITON_RPC_URL?.trim() ??
+    null
+  );
+}
+
 export function getServerSolanaRpcUrl(): string {
   assertNoForbiddenPublicSecrets();
   return (

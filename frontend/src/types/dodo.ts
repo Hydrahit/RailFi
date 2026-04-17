@@ -61,4 +61,7 @@ export interface DodoOfframpIntent {
   transferId?: string;
   solanaTx?: string;
   executedAt?: number;
+  failureReason?: string;
+  retryCount?: number;
+  lastRetryAt?: number;
 }

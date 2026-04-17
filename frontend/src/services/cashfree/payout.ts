@@ -9,6 +9,12 @@ import {
   putOfframpRecord,
   updateOfframpRecord,
 } from "@/lib/offramp-store";
+import {
+  buildExternalPayoutTransferId,
+  completePayoutAttempt,
+  createPayoutAttempt,
+  failPayoutAttempt,
+} from "@/lib/payout-attempts";
 import type { OfframpRecord } from "@/types/offramp";
 
 const CASHFREE_TOKEN_CACHE_KEY = "cashfree:auth:token";
@@ -94,6 +100,8 @@ interface InitiateUpiPayoutParams {
   amountMicroUsdc: string;
   inrPaise: string;
   referralPubkey: string | null;
+  externalTransferId?: string;
+  attemptKind?: "cashfree-init" | "cashfree-retry";
 }
 
 function getRedis() {
@@ -185,6 +193,10 @@ async function persistPayoutRecord(record: CashfreePayoutRecord): Promise<void> 
 
 async function readPayoutRecord(transferId: string): Promise<CashfreePayoutRecord | null> {
   return (await getRedis().get<CashfreePayoutRecord>(payoutRecordKey(transferId))) ?? null;
+}
+
+export async function getStoredPayoutRecord(transferId: string): Promise<CashfreePayoutRecord | null> {
+  return readPayoutRecord(transferId);
 }
 
 async function updatePayoutRecord(
@@ -329,7 +341,7 @@ export async function recordPayoutQueued(args: {
     referralPubkey: args.prepared.referralPubkey,
     amountInr: paiseToInrString(args.prepared.inrPaise),
     status: "PENDING",
-    cashfreeTransferId: null,
+    cashfreeTransferId: args.transferId,
     utr: null,
     createdAt: now,
     updatedAt: now,
@@ -352,9 +364,12 @@ export async function recordPayoutQueued(args: {
       utr: null,
       createdAt: new Date(now * 1000).toISOString(),
       completedAt: null,
-      requiresReview: false,
-      referralPubkey: args.prepared.referralPubkey,
-    });
+        requiresReview: false,
+        failureReason: null,
+        retryCount: 0,
+        lastRetryAt: null,
+        referralPubkey: args.prepared.referralPubkey,
+      });
   }
   return record;
 }
@@ -362,10 +377,19 @@ export async function recordPayoutQueued(args: {
 export async function initiateUpiPayout(
   params: InitiateUpiPayoutParams,
 ): Promise<{ cashfreeTransferId: string | null; status: CashfreePayoutStatus; utr: string | null }> {
+  const externalTransferId =
+    params.externalTransferId?.trim() || buildExternalPayoutTransferId(params.transferId, 0);
+
   try {
+    await createPayoutAttempt({
+      transferId: params.transferId,
+      externalTransferId,
+      kind: params.attemptKind ?? "cashfree-init",
+    });
+
     const token = await getCashfreeToken();
     await addBeneficiary({
-      transferId: params.transferId,
+      transferId: externalTransferId,
       token,
       upiId: params.upiId,
     });
@@ -378,8 +402,8 @@ export async function initiateUpiPayout(
         Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({
-        beneId: params.transferId,
-        transferId: params.transferId,
+        beneId: externalTransferId,
+        transferId: externalTransferId,
         amount: Number(amountInr),
         transferMode: "upi",
         remarks: `RailFi payout for ${params.solanaSignature}`,
@@ -389,7 +413,7 @@ export async function initiateUpiPayout(
 
     const payload = (await response.json().catch(() => ({}))) as CashfreeTransferResponse;
     const nextStatus = normalizeCashfreeStatus(payload.data?.status ?? payload.status);
-    const cashfreeTransferId = payload.data?.transferId?.trim() || params.transferId;
+    const cashfreeTransferId = payload.data?.transferId?.trim() || externalTransferId;
     const utr = payload.data?.utr?.trim() || null;
 
     await updatePayoutRecord(params.transferId, (current) => {
@@ -415,6 +439,10 @@ export async function initiateUpiPayout(
         status: response.ok ? mapCashfreeStatusToOfframpStatus(payload.data?.status ?? payload.status) : "FAILED",
         cashfreeId: cashfreeTransferId,
         utr,
+        retryCount: (current.retryCount ?? 0) + (params.attemptKind === "cashfree-retry" ? 1 : 0),
+        lastRetryAt:
+          params.attemptKind === "cashfree-retry" ? new Date().toISOString() : current.lastRetryAt ?? null,
+        failureReason: response.ok ? null : payload.message ?? "Cashfree transfer failed.",
         completedAt:
           nextStatus === "SUCCESS" || nextStatus === "FAILED"
             ? new Date().toISOString()
@@ -424,13 +452,21 @@ export async function initiateUpiPayout(
     });
 
     if (!response.ok) {
+      await failPayoutAttempt(
+        externalTransferId,
+        payload.message ?? `Cashfree transfer failed with status ${response.status}.`,
+      );
       throw new Error(
         payload.message ?? `Cashfree transfer failed with status ${response.status}.`,
       );
     }
 
+    await completePayoutAttempt(externalTransferId);
+
     return { cashfreeTransferId, status: nextStatus, utr };
   } catch (error) {
+    const message = error instanceof Error ? error.message : "Cashfree transfer failed.";
+    await failPayoutAttempt(externalTransferId, message);
     await updatePayoutRecord(params.transferId, (current) => {
       if (!current) {
         return null;
@@ -439,6 +475,7 @@ export async function initiateUpiPayout(
       return {
         ...current,
         status: "FAILED",
+        cashfreeTransferId: current.cashfreeTransferId ?? externalTransferId,
         updatedAt: Math.floor(Date.now() / 1000),
       };
     });
@@ -452,6 +489,10 @@ export async function initiateUpiPayout(
         status: "FAILED",
         completedAt: new Date().toISOString(),
         requiresReview: true,
+        failureReason: message,
+        retryCount: (current.retryCount ?? 0) + (params.attemptKind === "cashfree-retry" ? 1 : 0),
+        lastRetryAt:
+          params.attemptKind === "cashfree-retry" ? new Date().toISOString() : current.lastRetryAt ?? null,
       };
     });
     throw error;
@@ -465,10 +506,12 @@ export async function getPayoutStatus(transferId: string): Promise<CashfreePayou
     return null;
   }
 
+  const externalTransferId = canonical?.cashfreeId ?? existing.cashfreeTransferId ?? transferId;
+
   try {
     const token = await getCashfreeToken();
     const response = await fetch(
-      `${getCashfreeBaseUrl()}/payout/v1/transfer/status?transferId=${encodeURIComponent(transferId)}`,
+      `${getCashfreeBaseUrl()}/payout/v1/transfer/status?transferId=${encodeURIComponent(externalTransferId)}`,
       {
         method: "GET",
         headers: {
@@ -483,7 +526,7 @@ export async function getPayoutStatus(transferId: string): Promise<CashfreePayou
     }
 
     const payload = (await response.json().catch(() => ({}))) as CashfreeTransferStatusResponse;
-    return await updatePayoutRecord(transferId, (current) => {
+    const next = await updatePayoutRecord(transferId, (current) => {
       if (!current) {
         return null;
       }
@@ -491,11 +534,38 @@ export async function getPayoutStatus(transferId: string): Promise<CashfreePayou
       return {
         ...current,
         status: normalizeCashfreeStatus(payload.data?.status ?? payload.status),
-        cashfreeTransferId: payload.data?.transferId?.trim() || current.cashfreeTransferId,
+        cashfreeTransferId:
+          payload.data?.transferId?.trim() || current.cashfreeTransferId || externalTransferId,
         utr: payload.data?.utr?.trim() || current.utr,
         updatedAt: Math.floor(Date.now() / 1000),
       };
     });
+    await updateOfframpRecord(transferId, (current) => {
+      if (!current || !next) {
+        return current;
+      }
+
+      const mappedStatus = mapCashfreeStatusToOfframpStatus(next.status);
+      return {
+        ...current,
+        status:
+          mappedStatus === "FAILED" || mappedStatus === "REVERSED"
+            ? "REQUIRES_REVIEW"
+            : mappedStatus,
+        cashfreeId: next.cashfreeTransferId ?? current.cashfreeId,
+        utr: next.utr ?? current.utr,
+        completedAt:
+          mappedStatus === "SUCCESS" || mappedStatus === "FAILED" || mappedStatus === "REVERSED"
+            ? new Date().toISOString()
+            : current.completedAt,
+        requiresReview: mappedStatus === "FAILED" || mappedStatus === "REVERSED",
+        failureReason:
+          mappedStatus === "FAILED" || mappedStatus === "REVERSED"
+            ? `Cashfree payout status resolved to ${next.status}.`
+            : null,
+      };
+    });
+    return next;
   } catch {
     return existing;
   }

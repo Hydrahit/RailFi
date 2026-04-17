@@ -110,13 +110,27 @@ async function restoreReadyForRelayIntent(
     return;
   }
 
-  await redis.setex(intentKey, 86400, {
+  const restoredIntent: DodoOfframpIntent = {
     ...currentIntent,
     status: "READY_FOR_RELAY",
     executionLockToken: undefined,
     executionStartedAt: undefined,
+    failureReason: errorMessage,
     lastExecutionError: errorMessage,
-  } satisfies DodoOfframpIntent);
+    retryCount: (currentIntent.retryCount ?? 0) + 1,
+    lastRetryAt: Date.now(),
+  };
+
+  await redis.setex(intentKey, 86400, restoredIntent satisfies DodoOfframpIntent);
+
+  try {
+    await mirrorDodoSettlementAudit(restoredIntent);
+  } catch (error) {
+    console.error("[dodo/execute] Failed to mirror restored intent", {
+      dodoPaymentId: restoredIntent.dodoPaymentId,
+      error,
+    });
+  }
 }
 
 function getErrorMessage(payload: RelaySuccessPayload | null, fallback: string): string {
@@ -321,6 +335,12 @@ export async function POST(request: NextRequest): Promise<Response> {
     };
 
     await redis.setex(intentKey, 86400, executingIntent);
+    await mirrorDodoSettlementAudit(executingIntent).catch((error) => {
+      console.error("[dodo/execute] Failed to mirror executing intent", {
+        dodoPaymentId: executingIntent.dodoPaymentId,
+        error,
+      });
+    });
 
     const lockStillOwnedBeforePrepare = await refreshExecutionLock(lockKey, lockValue);
     if (!lockStillOwnedBeforePrepare) {

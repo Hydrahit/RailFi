@@ -16,19 +16,17 @@ export async function mirrorDodoSettlementAudit(
   }
 
   if (
-    !intent.transferId ||
-    !intent.solanaTx ||
     !intent.walletAddress ||
     typeof intent.usdcAmount !== "number" ||
     typeof intent.inrQuote !== "number"
   ) {
-    throw new Error("Cannot mirror Dodo settlement audit without finalized transfer data.");
+    throw new Error("Cannot mirror Dodo settlement audit without claimed execution context.");
   }
 
   const auditPayload = {
     dodoPaymentId: intent.dodoPaymentId,
-    transferId: intent.transferId,
-    solanaTx: intent.solanaTx,
+    transferId: intent.transferId ?? null,
+    solanaTx: intent.solanaTx ?? null,
     walletAddress: intent.walletAddress,
     customerEmail: intent.customerEmail,
     customerName: intent.customerName,
@@ -37,6 +35,12 @@ export async function mirrorDodoSettlementAudit(
     amountMicroUsdc: String(intent.usdcAmount),
     inrQuotePaise: intent.inrQuote,
     status: intent.status,
+    failureReason: intent.failureReason ?? intent.lastExecutionError ?? null,
+    retryCount: intent.retryCount ?? 0,
+    lastRetryAt:
+      typeof intent.lastRetryAt === "number"
+        ? new Date(intent.lastRetryAt)
+        : null,
     executionLockToken: intent.executionLockToken ?? null,
     executionStartedAt:
       typeof intent.executionStartedAt === "number"
