@@ -1,0 +1,6 @@
+- [ ] `anchor test` passes locally
+- [ ] `tsc --noEmit` passes with zero errors
+- [ ] New instructions have corresponding test cases
+- [ ] No hardcoded keypairs or secrets in source
+- [ ] Circuit breaker impact assessed for new outflow paths
+- [ ] CHANGELOG.md updated

@@ -1,0 +1,51 @@
+[package]
+name = "railpay-contract"
+version = "0.1.0"
+description = "RailPay — UPI-linked USDC receiving protocol"
+edition = "2021"
+rust-version = "1.75.0"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "railpay_contract"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build", "pyth-solana-receiver-sdk/idl-build"]
+
+[dependencies]
+anchor-lang = { version = "=0.29.0", features = ["init-if-needed"] }
+anchor-spl  = { version = "=0.29.0", features = ["token", "associated_token"] }
+solana-program = "=1.18.26"
+
+# ── MSRV 1.75 pins ────────────────────────────────────────────────────────
+# These exact versions are the only ones that satisfy:
+#   (a) proc-macro-crate stays at ^3.0.0 (not 3.5.0 which pulls edition2024)
+#   (b) solana-program stays at 1.18.26 (required by anchor 0.29.0)
+#   (c) cargo-build-sbf bundled cargo 1.75 can parse all manifests
+borsh                        = "=1.4.0"
+borsh-derive                 = "=1.4.0"
+spl-token-2022               = "=0.9.0"
+spl-transfer-hook-interface  = "=0.3.0"
+spl-type-length-value        = "=0.3.0"
+spl-token-metadata-interface = "=0.2.0"
+spl-token-group-interface    = "=0.1.0"
+spl-program-error            = "=0.3.0"
+proc-macro-crate             = "=1.3.1"
+pyth-solana-receiver-sdk    = { version = "=0.3.0", default-features = false }
+bincode                      = "=1.3.3"
+
+# ── Bubblegum / cNFT crates INTENTIONALLY REMOVED ─────────────────────────
+# mpl-bubblegum    — removed: IDL generation crash (__anchor_private_full_path)
+# spl-account-compression — removed: solana-program version conflict + stack overflow
+# spl-noop         — removed: no longer needed without above crates
+#
+# cNFT minting is implemented via Raw CPI in lib.rs:
+#   - Manual BorshSerialize structs matching the Bubblegum IDL layout
+#   - Instruction discriminator hardcoded: sha256("global:mint_v1")[:8]
+#   - invoke_signed called directly with manually constructed Instruction
+#   - #[inline(never)] + Box<> keeps the stack frame under 4096 bytes

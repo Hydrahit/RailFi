@@ -1,0 +1,12 @@
+target/
+.anchor/
+test-ledger/
+node_modules/
+scripts/node_modules/
+*.so
+*.d
+*Zone.Identifier
+**/.DS_Store
+keys/
+
+# Cargo.lock should be committed for reproducible Anchor builds.

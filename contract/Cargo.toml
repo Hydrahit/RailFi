@@ -1,0 +1,21 @@
+[workspace]
+members = ["programs/railpay-contract"]
+resolver = "2"                  # CRITICAL — must be resolver v2
+
+[workspace.package]
+rust-version = "1.75.0"         # Workspace-level MSRV declaration
+
+[profile.release]
+overflow-checks = true
+lto = "fat"
+codegen-units = 1
+
+[profile.release.build-override]
+opt-level = 3
+incremental = false
+codegen-units = 1
+
+[patch.crates-io]
+anchor-lang = { version = "=0.29.0", git = "https://github.com/coral-xyz/anchor", tag = "v0.29.0" }
+anchor-syn = { version = "=0.29.0", git = "https://github.com/coral-xyz/anchor", tag = "v0.29.0" }
+pyth-solana-receiver-sdk = { path = "vendor/pyth-solana-receiver-sdk" }

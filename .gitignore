@@ -1,0 +1,88 @@
+# ===========================
+# SECRETS & ENVIRONMENT VARS
+# ===========================
+.env
+.env.local
+.env.development
+.env.development.local
+.env.test
+.env.test.local
+.env.production
+.env.production.local
+.env.*
+*.env
+
+# ===========================
+# SOLANA KEYPAIRS (CRITICAL)
+# ===========================
+# Block ALL .json files that could be wallets — safer to whitelist than blacklist
+id.json
+*.json
+# Re-allow specific non-wallet JSON files that are safe to track
+!contract/Anchor.toml
+!contract/package.json
+!frontend/package.json
+!frontend/package-lock.json
+!frontend/tsconfig.json
+!frontend/next.config.json
+!frontend/tailwind.config.json
+!frontend/postcss.config.json
+!frontend/src/idl/railpay.json
+!contract/tsconfig.json
+
+# ===========================
+# ANCHOR / RUST BUILD ARTIFACTS
+# ===========================
+contract/target/
+contract/.anchor/
+contract/test-ledger/
+contract/deploy/
+**/*.so
+**/*.d
+
+# ===========================
+# NODE / NEXT.JS ARTIFACTS
+# ===========================
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.cache/
+frontend/build/
+frontend/dev.db
+node_modules/
+.pnp
+.pnp.js
+
+# ===========================
+# OS & EDITOR JUNK
+# ===========================
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ===========================
+# LOGS
+# ===========================
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ===========================
+# MISC SENSITIVE FILES
+# ===========================
+*.pem
+*.key
+*.p12
+*.pfx
+*.cert
+*.crt
+.npmrc
+.yarnrc
+
+.vercel

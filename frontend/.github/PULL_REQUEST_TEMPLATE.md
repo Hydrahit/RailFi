@@ -1,0 +1,5 @@
+- [ ] `tsc --noEmit` passes with zero errors
+- [ ] `npm run build` passes locally
+- [ ] No hardcoded keypairs or secrets in source
+- [ ] Contract-facing changes were checked against the deployed program/IDL
+- [ ] CHANGELOG.md updated

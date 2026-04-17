@@ -1,0 +1,1077 @@
+{
+  "version": "0.1.0",
+  "name": "railpay_contract",
+  "instructions": [
+    {
+      "name": "initializeProtocol",
+      "accounts": [
+        {
+          "name": "admin",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "protocolConfig",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "usdcMint",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "merkleTree",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "treeConfig",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "bubblegumProgram",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "kycAuthority",
+          "type": "publicKey"
+        },
+        {
+          "name": "kaminoEnabled",
+          "type": "bool"
+        },
+        {
+          "name": "oracleMaxAge",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "initializeUser",
+      "accounts": [
+        {
+          "name": "feePayer",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "user",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "userVault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "upiHandle",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "receiveUsdc",
+      "accounts": [
+        {
+          "name": "feePayer",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "user",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "protocolConfig",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "userVault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "userUsdcAccount",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "vaultUsdcAccount",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "usdcMint",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "tokenProgram",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "associatedTokenProgram",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        },
+        {
+          "name": "senderNote",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "triggerOfframp",
+      "accounts": [
+        {
+          "name": "feePayer",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "kycAuthority",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "user",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "protocolConfig",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "circuitBreaker",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "usdcUsdPriceUpdate",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "userVault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "offrampRequest",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "vaultUsdcAccount",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "protocolTreasuryAta",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "usdcMint",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "merkleTree",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "treeConfig",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "bubblegumProgram",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "logWrapper",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "compressionProgram",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "tokenProgram",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "usdcAmount",
+          "type": "u64"
+        },
+        {
+          "name": "destinationUpi",
+          "type": "string"
+        },
+        {
+          "name": "inrPaise",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "initializeCircuitBreaker",
+      "accounts": [
+        {
+          "name": "admin",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "protocolConfig",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "circuitBreaker",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "initializeReferral",
+      "accounts": [
+        {
+          "name": "referrer",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "referralConfig",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "feeBps",
+          "type": "u16"
+        }
+      ]
+    },
+    {
+      "name": "migrateProtocolConfig",
+      "accounts": [
+        {
+          "name": "admin",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "protocolConfig",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "oracleMaxAge",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "adminResetCircuitBreaker",
+      "accounts": [
+        {
+          "name": "admin",
+          "isMut": false,
+          "isSigner": true
+        },
+        {
+          "name": "protocolConfig",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "circuitBreaker",
+          "isMut": true,
+          "isSigner": false
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "updateCircuitBreakerConfig",
+      "accounts": [
+        {
+          "name": "admin",
+          "isMut": false,
+          "isSigner": true
+        },
+        {
+          "name": "protocolConfig",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "circuitBreaker",
+          "isMut": true,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "params",
+          "type": {
+            "defined": "UpdateCircuitBreakerParams"
+          }
+        }
+      ]
+    },
+    {
+      "name": "setKaminoEnabled",
+      "accounts": [
+        {
+          "name": "admin",
+          "isMut": false,
+          "isSigner": true
+        },
+        {
+          "name": "protocolConfig",
+          "isMut": true,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "enabled",
+          "type": "bool"
+        }
+      ]
+    },
+    {
+      "name": "setOracleMaxAge",
+      "accounts": [
+        {
+          "name": "admin",
+          "isMut": false,
+          "isSigner": true
+        },
+        {
+          "name": "protocolConfig",
+          "isMut": true,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "oracleMaxAge",
+          "type": "u64"
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "CircuitBreaker",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "type": "publicKey"
+          },
+          {
+            "name": "maxOutflowPerWindow",
+            "type": "u64"
+          },
+          {
+            "name": "windowDurationSeconds",
+            "type": "i64"
+          },
+          {
+            "name": "windowStart",
+            "type": "i64"
+          },
+          {
+            "name": "outflowThisWindow",
+            "type": "u64"
+          },
+          {
+            "name": "isTripped",
+            "type": "bool"
+          },
+          {
+            "name": "tripCount",
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "OfframpRequest",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "user",
+            "type": "publicKey"
+          },
+          {
+            "name": "vault",
+            "type": "publicKey"
+          },
+          {
+            "name": "usdcAmount",
+            "type": "u64"
+          },
+          {
+            "name": "inrPaise",
+            "type": "u64"
+          },
+          {
+            "name": "receiptId",
+            "type": "u32"
+          },
+          {
+            "name": "destinationUpi",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          },
+          {
+            "name": "lockedUsdcUsdPrice",
+            "type": "i64"
+          },
+          {
+            "name": "priceExpo",
+            "type": "i32"
+          },
+          {
+            "name": "priceLockedAt",
+            "type": "i64"
+          },
+          {
+            "name": "priceConf",
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ProtocolConfig",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "admin",
+            "type": "publicKey"
+          },
+          {
+            "name": "usdcMint",
+            "type": "publicKey"
+          },
+          {
+            "name": "merkleTree",
+            "type": "publicKey"
+          },
+          {
+            "name": "kycAuthority",
+            "type": "publicKey"
+          },
+          {
+            "name": "oracleMaxAge",
+            "type": "u64"
+          },
+          {
+            "name": "kaminoEnabled",
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ReferralConfig",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "referrer",
+            "type": "publicKey"
+          },
+          {
+            "name": "feeBps",
+            "type": "u16"
+          },
+          {
+            "name": "totalEarnedUsdc",
+            "type": "u64"
+          },
+          {
+            "name": "totalReferred",
+            "type": "u64"
+          },
+          {
+            "name": "isActive",
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "UserVault",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "owner",
+            "type": "publicKey"
+          },
+          {
+            "name": "upiHandleRef",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "totalReceived",
+            "type": "u64"
+          },
+          {
+            "name": "totalOfframped",
+            "type": "u64"
+          },
+          {
+            "name": "receiptCount",
+            "type": "u32"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "isActive",
+            "type": "bool"
+          }
+        ]
+      }
+    }
+  ],
+  "types": [
+    {
+      "name": "UpdateCircuitBreakerParams",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "newMaxOutflow",
+            "type": {
+              "option": "u64"
+            }
+          },
+          {
+            "name": "newWindowDuration",
+            "type": {
+              "option": "i64"
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "events": [
+    {
+      "name": "CircuitBreakerReset",
+      "fields": [
+        {
+          "name": "resetBy",
+          "type": "publicKey",
+          "index": false
+        },
+        {
+          "name": "previousTripCount",
+          "type": "u64",
+          "index": false
+        },
+        {
+          "name": "atTimestamp",
+          "type": "i64",
+          "index": false
+        }
+      ]
+    },
+    {
+      "name": "CircuitBreakerTripped",
+      "fields": [
+        {
+          "name": "triggeredBy",
+          "type": "publicKey",
+          "index": false
+        },
+        {
+          "name": "attemptedAmount",
+          "type": "u64",
+          "index": false
+        },
+        {
+          "name": "windowOutflowBefore",
+          "type": "u64",
+          "index": false
+        },
+        {
+          "name": "atTimestamp",
+          "type": "i64",
+          "index": false
+        }
+      ]
+    },
+    {
+      "name": "KaminoModeUpdated",
+      "fields": [
+        {
+          "name": "admin",
+          "type": "publicKey",
+          "index": false
+        },
+        {
+          "name": "protocolConfig",
+          "type": "publicKey",
+          "index": false
+        },
+        {
+          "name": "kaminoEnabled",
+          "type": "bool",
+          "index": false
+        },
+        {
+          "name": "timestamp",
+          "type": "i64",
+          "index": false
+        }
+      ]
+    },
+    {
+      "name": "OfframpRequested",
+      "fields": [
+        {
+          "name": "user",
+          "type": "publicKey",
+          "index": false
+        },
+        {
+          "name": "vault",
+          "type": "publicKey",
+          "index": false
+        },
+        {
+          "name": "usdcAmount",
+          "type": "u64",
+          "index": false
+        },
+        {
+          "name": "inrPaise",
+          "type": "u64",
+          "index": false
+        },
+        {
+          "name": "receiptId",
+          "type": "u32",
+          "index": false
+        },
+        {
+          "name": "destinationUpi",
+          "type": "string",
+          "index": false
+        },
+        {
+          "name": "timestamp",
+          "type": "i64",
+          "index": false
+        }
+      ]
+    },
+    {
+      "name": "OracleMaxAgeUpdated",
+      "fields": [
+        {
+          "name": "admin",
+          "type": "publicKey",
+          "index": false
+        },
+        {
+          "name": "protocolConfig",
+          "type": "publicKey",
+          "index": false
+        },
+        {
+          "name": "oracleMaxAge",
+          "type": "u64",
+          "index": false
+        },
+        {
+          "name": "timestamp",
+          "type": "i64",
+          "index": false
+        }
+      ]
+    },
+    {
+      "name": "ProtocolInitialized",
+      "fields": [
+        {
+          "name": "admin",
+          "type": "publicKey",
+          "index": false
+        },
+        {
+          "name": "protocolConfig",
+          "type": "publicKey",
+          "index": false
+        },
+        {
+          "name": "usdcMint",
+          "type": "publicKey",
+          "index": false
+        },
+        {
+          "name": "merkleTree",
+          "type": "publicKey",
+          "index": false
+        },
+        {
+          "name": "kycAuthority",
+          "type": "publicKey",
+          "index": false
+        },
+        {
+          "name": "oracleMaxAge",
+          "type": "u64",
+          "index": false
+        },
+        {
+          "name": "kaminoEnabled",
+          "type": "bool",
+          "index": false
+        },
+        {
+          "name": "timestamp",
+          "type": "i64",
+          "index": false
+        }
+      ]
+    },
+    {
+      "name": "ReferralInitialized",
+      "fields": [
+        {
+          "name": "referrer",
+          "type": "publicKey",
+          "index": false
+        },
+        {
+          "name": "referralConfig",
+          "type": "publicKey",
+          "index": false
+        },
+        {
+          "name": "feeBps",
+          "type": "u16",
+          "index": false
+        },
+        {
+          "name": "timestamp",
+          "type": "i64",
+          "index": false
+        }
+      ]
+    },
+    {
+      "name": "UsdcReceived",
+      "fields": [
+        {
+          "name": "user",
+          "type": "publicKey",
+          "index": false
+        },
+        {
+          "name": "amount",
+          "type": "u64",
+          "index": false
+        },
+        {
+          "name": "senderNote",
+          "type": "string",
+          "index": false
+        },
+        {
+          "name": "runningTotal",
+          "type": "u64",
+          "index": false
+        },
+        {
+          "name": "timestamp",
+          "type": "i64",
+          "index": false
+        }
+      ]
+    },
+    {
+      "name": "UserInitialized",
+      "fields": [
+        {
+          "name": "user",
+          "type": "publicKey",
+          "index": false
+        },
+        {
+          "name": "vault",
+          "type": "publicKey",
+          "index": false
+        },
+        {
+          "name": "timestamp",
+          "type": "i64",
+          "index": false
+        }
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "AmountTooSmall",
+      "msg": "Amount must be at least 0.01 USDC (10_000 micro-USDC)"
+    },
+    {
+      "code": 6001,
+      "name": "InsufficientBalance",
+      "msg": "Insufficient USDC balance in vault"
+    },
+    {
+      "code": 6002,
+      "name": "InsufficientEscrowBalance",
+      "msg": "Vault escrow ATA does not currently hold enough USDC"
+    },
+    {
+      "code": 6003,
+      "name": "UnauthorizedAccess",
+      "msg": "You are not the owner of this vault"
+    },
+    {
+      "code": 6004,
+      "name": "VaultInactive",
+      "msg": "This vault has been deactivated"
+    },
+    {
+      "code": 6005,
+      "name": "InvalidUsdcMint",
+      "msg": "The supplied USDC mint is not approved by protocol config"
+    },
+    {
+      "code": 6006,
+      "name": "InvalidMerkleTree",
+      "msg": "The supplied Merkle tree is not approved by protocol config"
+    },
+    {
+      "code": 6007,
+      "name": "MathOverflow",
+      "msg": "Arithmetic overflow"
+    },
+    {
+      "code": 6008,
+      "name": "Overflow",
+      "msg": "Arithmetic overflow"
+    },
+    {
+      "code": 6009,
+      "name": "NoteTooLong",
+      "msg": "Note exceeds 100 character limit"
+    },
+    {
+      "code": 6010,
+      "name": "HandleTooLong",
+      "msg": "UPI handle exceeds 50 character limit"
+    },
+    {
+      "code": 6011,
+      "name": "HandleTooLongForStorage",
+      "msg": "UPI handle must fit in 32 bytes for deterministic on-chain storage"
+    },
+    {
+      "code": 6012,
+      "name": "InvalidUpiHandle",
+      "msg": "UPI handle format is invalid"
+    },
+    {
+      "code": 6013,
+      "name": "SerializationError",
+      "msg": "Failed to serialize Bubblegum instruction data"
+    },
+    {
+      "code": 6014,
+      "name": "CpiError",
+      "msg": "Bubblegum CPI invocation failed"
+    },
+    {
+      "code": 6015,
+      "name": "Unauthorized",
+      "msg": "Unauthorized - caller is not the admin authority"
+    },
+    {
+      "code": 6016,
+      "name": "CircuitBreakerTripped",
+      "msg": "Circuit breaker is tripped - withdrawals paused"
+    },
+    {
+      "code": 6017,
+      "name": "InvalidCircuitBreakerConfig",
+      "msg": "Circuit breaker config must be greater than zero"
+    },
+    {
+      "code": 6018,
+      "name": "StalePriceFeed",
+      "msg": "Pyth price feed is older than the configured maximum age"
+    },
+    {
+      "code": 6019,
+      "name": "PriceConfidenceTooWide",
+      "msg": "Pyth price confidence interval exceeds 0.5% - market too volatile"
+    },
+    {
+      "code": 6020,
+      "name": "WrongPriceFeedAccount",
+      "msg": "Wrong price feed account - does not match expected Pyth feed pubkey"
+    },
+    {
+      "code": 6021,
+      "name": "MissingKycAuthorization",
+      "msg": "KYC authorization is required before triggering an offramp"
+    },
+    {
+      "code": 6022,
+      "name": "InvalidKycAuthority",
+      "msg": "KYC authority signer does not match the configured protocol authority"
+    },
+    {
+      "code": 6023,
+      "name": "InvalidFeeBps",
+      "msg": "Referral fee bps must be between 1 and 5000"
+    },
+    {
+      "code": 6024,
+      "name": "InactiveReferral",
+      "msg": "Referral config is not active"
+    },
+    {
+      "code": 6025,
+      "name": "InvalidReferralAccounts",
+      "msg": "Referral accounts are invalid for this offramp"
+    },
+    {
+      "code": 6026,
+      "name": "InvalidReferrerTokenAccount",
+      "msg": "Referrer USDC token account is invalid"
+    },
+    {
+      "code": 6027,
+      "name": "InvalidProtocolTreasuryAccount",
+      "msg": "Protocol treasury ATA is invalid"
+    },
+    {
+      "code": 6028,
+      "name": "InvalidProtocolConfigAccount",
+      "msg": "Protocol config account is invalid"
+    },
+    {
+      "code": 6029,
+      "name": "InvalidOracleMaxAge",
+      "msg": "Oracle max age must be greater than zero"
+    }
+  ]
+}

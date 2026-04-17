@@ -1,0 +1,46 @@
+# dependencies
+node_modules/
+/.pnp
+.pnp.js
+.yarn/install-state.gz
+
+# testing
+/coverage
+
+# next.js
+.next/
+out/
+
+# production
+/build
+
+# local env files
+.env.local
+.env
+.env*.local
+
+# app data
+data/
+data/offramp-records.json
+
+# local artifacts
+.scaffold-backup-*/
+railpay-clean/
+*.zip
+*.pem
+.vercel
+railpay_diagnostics.txt
+
+# misc
+**/.DS_Store
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+.vercel

@@ -1,0 +1,66 @@
+name: Deploy to Devnet
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: devnet
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.89.0"
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "programs -> target"
+
+      - name: Install Solana CLI
+        run: |
+          sh -c "$(curl -sSfL https://release.solana.com/v1.18.18/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+
+      - name: Install Anchor CLI
+        run: cargo install --git https://github.com/coral-xyz/anchor avm --locked && avm install 0.29.0 && avm use 0.29.0
+
+      - name: Install Node deps
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            scripts/package-lock.json
+
+      - run: npm ci
+
+      - name: Install script deps
+        run: npm ci
+        working-directory: scripts
+
+      - name: Restore deploy keypair
+        run: |
+          mkdir -p ~/.config/solana
+          echo "${{ secrets.DEPLOY_KEYPAIR }}" > ~/.config/solana/deploy-keypair.json
+          solana config set --keypair ~/.config/solana/deploy-keypair.json
+          solana config set --url devnet
+
+      - name: Build program
+        run: anchor build
+
+      - name: Deploy to Devnet
+        run: anchor deploy --provider.cluster devnet
+
+      - name: Run smoke test
+        run: npx ts-node --project scripts/tsconfig.json scripts/smoke-test-devnet.ts
+        env:
+          DEPLOY_KEYPAIR: ${{ secrets.DEPLOY_KEYPAIR }}
+          PROGRAM_ID: ${{ secrets.PROGRAM_ID }}
