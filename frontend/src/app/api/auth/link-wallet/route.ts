@@ -3,12 +3,16 @@ import { auth } from "../../../../../auth";
 import { db } from "@/lib/db";
 import { verifyWalletSignature } from "@/lib/siws";
 import { setProfileFlags } from "@/lib/offramp-store";
+import { getRefreshedWalletSessionFromRequest } from "@/lib/wallet-session-server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
-  const session = await auth();
+  const [session, walletSession] = await Promise.all([
+    auth(),
+    getRefreshedWalletSessionFromRequest(request),
+  ]);
   if (!session?.user?.email) {
     return NextResponse.json({ error: "Google session required." }, { status: 401 });
   }
@@ -19,16 +23,29 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     signature?: string;
   } | null;
 
-  const walletAddress = body?.walletAddress?.trim();
-  const message = body?.message?.trim();
-  const signature = body?.signature?.trim();
+  const requestedWalletAddress = body?.walletAddress?.trim() ?? "";
+  const message = body?.message?.trim() ?? "";
+  const signature = body?.signature?.trim() ?? "";
 
-  if (!walletAddress || !message || !signature) {
-    return NextResponse.json({ error: "Wallet signature payload is required." }, { status: 400 });
+  let walletAddress = walletSession?.walletAddress ?? null;
+
+  if (requestedWalletAddress || message || signature) {
+    if (!requestedWalletAddress || !message || !signature) {
+      return NextResponse.json({ error: "Wallet signature payload is required." }, { status: 400 });
+    }
+
+    if (!verifyWalletSignature(requestedWalletAddress, message, signature)) {
+      return NextResponse.json({ error: "Invalid wallet signature." }, { status: 401 });
+    }
+
+    walletAddress = requestedWalletAddress;
   }
 
-  if (!verifyWalletSignature(walletAddress, message, signature)) {
-    return NextResponse.json({ error: "Invalid wallet signature." }, { status: 401 });
+  if (!walletAddress) {
+    return NextResponse.json(
+      { error: "Wallet session required. Connect your wallet before linking Google." },
+      { status: 401 },
+    );
   }
 
   await setProfileFlags(walletAddress, { googleLinked: true, walletLinked: true });

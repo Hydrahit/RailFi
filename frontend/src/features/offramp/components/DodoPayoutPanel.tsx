@@ -11,9 +11,10 @@ import {
   ShieldCheck,
   Wallet,
 } from "lucide-react";
+import { GoogleSignInButton } from "@/components/auth/GoogleSignInButton";
 import { StatusPill } from "@/components/ui/StatusPill";
-import { useWalletSession } from "@/components/WalletSessionProvider";
 import { useToast } from "@/hooks/useToast";
+import { useHybridAuth } from "@/hooks/useHybridAuth";
 import { isValidUpiFormat } from "@/features/offramp/utils/upi-validation";
 import { cn, explorerUrl, formatInr, shortAddress } from "@/lib/utils";
 
@@ -54,13 +55,6 @@ interface ApiErrorPayload {
   error?: string;
 }
 
-interface DodoAuthState {
-  googleLinked: boolean;
-  walletLinked: boolean;
-  walletAddress: string | null;
-  kycTier: number;
-}
-
 function formatUsdAmount(value: string): string {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) {
@@ -95,20 +89,6 @@ async function parseJson<T>(response: Response): Promise<T | null> {
   }
 }
 
-async function fetchDodoAuthState(): Promise<DodoAuthState> {
-  const response = await fetch("/api/auth/session-state", {
-    cache: "no-store",
-    credentials: "include",
-  });
-  const payload = await parseJson<DodoAuthState | ApiErrorPayload>(response);
-
-  if (!response.ok || !payload || !("googleLinked" in payload)) {
-    throw new Error(getApiErrorMessage(payload, "Unable to verify your RailFi session."));
-  }
-
-  return payload;
-}
-
 function isSuccessStatus(status: DodoStatusResponse | null): boolean {
   if (!status) {
     return false;
@@ -119,7 +99,13 @@ function isSuccessStatus(status: DodoStatusResponse | null): boolean {
 
 export function DodoPayoutPanel() {
   const { showToast } = useToast();
-  const { ensureSession, isAuthenticating, sessionWallet } = useWalletSession();
+  const {
+    authState,
+    isRefreshing,
+    isAuthenticatingWallet,
+    isLinking,
+    ensureLinkedIdentity,
+  } = useHybridAuth();
   const [phase, setPhase] = useState<DodoUiPhase>("INPUT");
   const [dodoPaymentId, setDodoPaymentId] = useState("");
   const [upiHandle, setUpiHandle] = useState("");
@@ -127,40 +113,9 @@ export function DodoPayoutPanel() {
   const [execution, setExecution] = useState<DodoExecuteResponse | null>(null);
   const [statusData, setStatusData] = useState<DodoStatusResponse | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [authState, setAuthState] = useState<DodoAuthState | null>(null);
   const [isClaiming, setIsClaiming] = useState(false);
   const [isExecuting, setIsExecuting] = useState(false);
   const [isPolling, setIsPolling] = useState(false);
-  const [isSyncingAuth, setIsSyncingAuth] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    const syncAuthState = async () => {
-      setIsSyncingAuth(true);
-
-      try {
-        const nextAuthState = await fetchDodoAuthState();
-        if (!cancelled) {
-          setAuthState(nextAuthState);
-        }
-      } catch {
-        if (!cancelled) {
-          setAuthState(null);
-        }
-      } finally {
-        if (!cancelled) {
-          setIsSyncingAuth(false);
-        }
-      }
-    };
-
-    void syncAuthState();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [sessionWallet]);
 
   useEffect(() => {
     if (phase !== "SETTLING" || !dodoPaymentId.trim()) {
@@ -266,33 +221,18 @@ export function DodoPayoutPanel() {
     }
   };
 
-  const prepareDodoAction = async (): Promise<DodoAuthState> => {
+  const prepareDodoAction = async () => {
     try {
-      await ensureSession();
+      return await ensureLinkedIdentity({ callbackUrl: "/transfer", preferWalletFirst: true });
     } catch (error: unknown) {
       const message =
-        error instanceof Error ? error.message : "Connect and authenticate your wallet to continue.";
-      setErrorMessage(message);
-      showToast(message, "error");
+        error instanceof Error ? error.message : "Unable to verify your RailFi auth state.";
+      if (message !== "Redirecting to Google sign-in...") {
+        setErrorMessage(message);
+        showToast(message, "error");
+      }
       throw error;
     }
-
-    const nextAuthState = await fetchDodoAuthState();
-    setAuthState(nextAuthState);
-
-    if (!nextAuthState.googleLinked) {
-      throw new Error(
-        "Google sign-in required. Sign in with the same email used on the Dodo payment before claiming.",
-      );
-    }
-
-    if (!nextAuthState.walletAddress) {
-      throw new Error(
-        "Wallet session required. Connect your Solana wallet and approve the signature before continuing.",
-      );
-    }
-
-    return nextAuthState;
   };
 
   const handleClaim = async () => {
@@ -491,31 +431,31 @@ export function DodoPayoutPanel() {
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <span>Google session</span>
                   <span className="font-[var(--font-mono)] text-[var(--text-heavy-primary)]">
-                    {isSyncingAuth ? "Checking..." : authState?.googleLinked ? "Linked" : "Required"}
+                    {isRefreshing ? "Checking..." : authState?.googleSessionActive ? "Linked" : "Required"}
                   </span>
                 </div>
                 <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
                   <span>Wallet session</span>
                   <span className="font-[var(--font-mono)] text-[var(--text-heavy-primary)]">
-                    {isAuthenticating || isSyncingAuth
+                    {isAuthenticatingWallet || isRefreshing || isLinking
                       ? "Checking..."
-                      : authState?.walletAddress ?? sessionWallet ?? "Required"}
+                      : authState?.walletAddress ?? "Required"}
                   </span>
                 </div>
-                {!authState?.googleLinked ? (
-                  <a
-                    href="/api/auth/signin/google?callbackUrl=/transfer"
+                {!authState?.googleSessionActive ? (
+                  <GoogleSignInButton
+                    callbackUrl="/transfer"
                     className="btn-ghost-dark mt-3 inline-flex w-auto rounded-full px-4 py-2 text-[11px]"
                   >
                     Sign in with Google
-                  </a>
+                  </GoogleSignInButton>
                 ) : null}
               </div>
 
               <button
                 type="button"
                 onClick={() => void handleClaim()}
-                disabled={!canClaim || isClaiming || isAuthenticating || isSyncingAuth}
+                disabled={!canClaim || isClaiming || isAuthenticatingWallet || isRefreshing || isLinking}
                 className="btn-primary rounded-lg"
               >
                 {isClaiming ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUpRight className="h-4 w-4" />}
@@ -698,7 +638,7 @@ export function DodoPayoutPanel() {
               <button
                 type="button"
                 onClick={() => void handleExecute()}
-                disabled={!canExecute || isExecuting || isAuthenticating || isSyncingAuth}
+                disabled={!canExecute || isExecuting || isAuthenticatingWallet || isRefreshing || isLinking}
                 className="btn-primary btn-accent mt-5 rounded-lg"
               >
                 {isExecuting ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUpRight className="h-4 w-4" />}

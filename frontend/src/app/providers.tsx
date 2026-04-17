@@ -13,6 +13,7 @@ import {
 } from "@solana/wallet-adapter-react-ui";
 import { clusterApiUrl } from "@solana/web3.js";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { HybridAuthBridge } from "@/components/auth/HybridAuthBridge";
 import { ToastProvider } from "@/components/ui/ToastProvider";
 import { WalletSessionProvider } from "@/components/WalletSessionProvider";
 import { RailpayProvider } from "@/providers/RailpayProvider";
@@ -49,6 +50,7 @@ export function Providers({ children }: { children: ReactNode }) {
           <SolanaWalletProvider wallets={wallets} autoConnect>
             <SolanaWalletModalProvider>
               <WalletSessionProvider>
+                <HybridAuthBridge />
                 <RailpayProvider>{children}</RailpayProvider>
               </WalletSessionProvider>
             </SolanaWalletModalProvider>

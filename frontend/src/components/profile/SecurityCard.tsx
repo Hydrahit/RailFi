@@ -1,3 +1,6 @@
+"use client";
+
+import { GoogleSignInButton } from "@/components/auth/GoogleSignInButton";
 import type { ProfileSummary } from "@/types/offramp";
 
 export function SecurityCard({ profile }: { profile: ProfileSummary }) {
@@ -24,12 +27,12 @@ export function SecurityCard({ profile }: { profile: ProfileSummary }) {
                 Linked
               </span>
             ) : (
-              <a
-                href="/api/auth/signin/google?callbackUrl=/profile"
+              <GoogleSignInButton
+                callbackUrl="/profile"
                 className="btn-ghost w-auto"
               >
                 Link Google
-              </a>
+              </GoogleSignInButton>
             )}
           </div>
         </div>

@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { ExternalLink, Shield, Sparkles, Waves, Zap } from "lucide-react";
+import { GoogleSignInButton } from "@/components/auth/GoogleSignInButton";
 import { PROGRAM_ID } from "@/lib/solana";
 import { ClientWalletMultiButton } from "@/components/ClientWalletMultiButton";
 import { StatusPill } from "@/components/ui/StatusPill";
@@ -253,15 +254,15 @@ function HeroCTASection() {
         </Link>
       </div>
 
-      <a
-        href="/api/auth/signin/google?callbackUrl=/dashboard"
+      <GoogleSignInButton
+        callbackUrl="/dashboard"
         className="inline-flex items-center gap-3 rounded-xl border border-[var(--border)] bg-[var(--surface-card)] px-5 py-3 text-sm font-[var(--font-syne)] font-[700] text-[var(--text-1)] shadow-[0_12px_24px_rgba(10,10,10,0.06)] transition hover:-translate-y-0.5"
       >
         <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-[var(--surface-card-soft)] text-[11px] font-[var(--font-mono)]">
           G
         </span>
         Sign in with Google
-      </a>
+      </GoogleSignInButton>
     </div>
   );
 }

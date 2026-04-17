@@ -13,7 +13,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   await setProfileFlags(walletSession.walletAddress, { walletLinked: true });
 
+  const body = (await request.json().catch(() => null)) as { callbackUrl?: string } | null;
+  const callbackUrl = body?.callbackUrl?.trim() || "/profile";
   const url = new URL("/api/auth/signin/google", request.url);
-  url.searchParams.set("callbackUrl", "/profile");
+  url.searchParams.set("callbackUrl", callbackUrl);
   return NextResponse.json({ redirectUrl: url.toString() }, { status: 200 });
 }
