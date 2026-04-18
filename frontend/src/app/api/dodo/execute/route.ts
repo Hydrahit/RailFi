@@ -4,7 +4,9 @@ import { NextRequest } from "next/server";
 import { auth } from "../../../../../auth";
 import { POST as relayPreparePost } from "@/app/api/relay/prepare/route";
 import { POST as relaySubmitPost } from "@/app/api/relay/submit/route";
+import { atomicPayoutStateTransition } from "@/lib/atomic-operations";
 import { mirrorDodoSettlementAudit } from "@/lib/dodo-audit";
+import { acquireLock, refreshLock, releaseLock } from "@/lib/redis-lock";
 import { getServerRedis } from "@/lib/upstash";
 import { getRefreshedWalletSessionFromRequest } from "@/lib/wallet-session-server";
 import type { RelayPrepareResponse, RelaySubmitResponse, TriggerOfframpRelayAction } from "@/lib/relayer/types";
@@ -25,12 +27,6 @@ interface ExecuteRequestBody {
 
 interface RelaySuccessPayload {
   error?: string;
-}
-
-interface DodoExecutionLock {
-  walletAddress: string;
-  token: string;
-  acquiredAt: number;
 }
 
 const EXECUTION_LOCK_TTL_SECONDS = 120;
@@ -63,37 +59,6 @@ async function parseJsonResponse<T>(response: Response): Promise<T | null> {
     return (await response.json()) as T;
   } catch {
     return null;
-  }
-}
-
-function serializeExecutionLock(lock: DodoExecutionLock): string {
-  return JSON.stringify(lock);
-}
-
-async function refreshExecutionLock(
-  lockKey: string,
-  expectedValue: string,
-): Promise<boolean> {
-  const redis = getRedis();
-  const currentValue = await redis.get<string>(lockKey);
-
-  if (currentValue !== expectedValue) {
-    return false;
-  }
-
-  await redis.expire(lockKey, EXECUTION_LOCK_TTL_SECONDS);
-  return true;
-}
-
-async function releaseExecutionLock(
-  lockKey: string,
-  expectedValue: string,
-): Promise<void> {
-  const redis = getRedis();
-  const currentValue = await redis.get<string>(lockKey);
-
-  if (currentValue === expectedValue) {
-    await redis.del(lockKey);
   }
 }
 
@@ -268,19 +233,11 @@ export async function POST(request: NextRequest): Promise<Response> {
   const intentKey = `railfi:dodo:intent:${dodoPaymentId}`;
   const lockKey = `railfi:dodo:lock:${dodoPaymentId}`;
   const lockToken = randomUUID();
-  const lockValue = serializeExecutionLock({
-    walletAddress,
-    token: lockToken,
-    acquiredAt: Date.now(),
-  });
-  const lockAcquired = await redis.set(lockKey, lockValue, {
-    nx: true,
-    ex: EXECUTION_LOCK_TTL_SECONDS,
-  });
+  const lockAcquired = await acquireLock(lockKey, lockToken, EXECUTION_LOCK_TTL_SECONDS);
 
-  if (lockAcquired === null) {
+  if (!lockAcquired) {
     return Response.json(
-      { error: "Execution already in progress for this payment. Please wait." },
+      { error: "Payment already being processed" },
       { status: 409 },
     );
   }
@@ -342,7 +299,11 @@ export async function POST(request: NextRequest): Promise<Response> {
       });
     });
 
-    const lockStillOwnedBeforePrepare = await refreshExecutionLock(lockKey, lockValue);
+    const lockStillOwnedBeforePrepare = await refreshLock(
+      lockKey,
+      lockToken,
+      EXECUTION_LOCK_TTL_SECONDS,
+    );
     if (!lockStillOwnedBeforePrepare) {
       await restoreReadyForRelayIntent(
         intentKey,
@@ -367,7 +328,11 @@ export async function POST(request: NextRequest): Promise<Response> {
       return prepared;
     }
 
-    const lockStillOwnedBeforeSubmit = await refreshExecutionLock(lockKey, lockValue);
+    const lockStillOwnedBeforeSubmit = await refreshLock(
+      lockKey,
+      lockToken,
+      EXECUTION_LOCK_TTL_SECONDS,
+    );
     if (!lockStillOwnedBeforeSubmit) {
       await restoreReadyForRelayIntent(
         intentKey,
@@ -394,6 +359,33 @@ export async function POST(request: NextRequest): Promise<Response> {
     }
 
     const payoutTransferId = submitted.payoutTransferId ?? undefined;
+
+    if (payoutTransferId) {
+      const transition = await atomicPayoutStateTransition({
+        transferId: payoutTransferId,
+        fromStatus: "ON_CHAIN_CONFIRMED",
+        toStatus: "PAYOUT_PENDING",
+        metadata: {
+          dodoPaymentId: intent.dodoPaymentId,
+          solanaTx: submitted.signature,
+          initiatedAt: new Date().toISOString(),
+        },
+        performedBy: `user:${walletAddress}`,
+      });
+
+      if (
+        !transition.ok &&
+        transition.reason !== "record_not_found" &&
+        transition.reason !== "state_mismatch"
+      ) {
+        console.error("[dodo/execute] Failed to record payout state transition", {
+          dodoPaymentId: intent.dodoPaymentId,
+          transferId: payoutTransferId,
+          reason: transition.reason,
+          error: transition.error,
+        });
+      }
+    }
 
     const settledIntent: DodoOfframpIntent = {
       ...intent,
@@ -431,6 +423,6 @@ export async function POST(request: NextRequest): Promise<Response> {
       message: "On-chain transaction confirmed. UPI payout is being processed.",
     });
   } finally {
-    await releaseExecutionLock(lockKey, lockValue);
+    await releaseLock(lockKey, lockToken);
   }
 }

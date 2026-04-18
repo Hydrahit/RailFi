@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { atomicProcessDodoWebhook } from "@/lib/atomic-operations";
 import { db } from "@/lib/db";
 import { stageDodoIntentFromWebhook } from "@/lib/dodo-intents";
-import { verifyQstashRequest } from "@/lib/qstash";
+import { requireInternalAuth } from "@/lib/internal-auth";
 import {
   completeRetryJob,
   markRetryJobAttempt,
@@ -21,12 +22,9 @@ interface WorkerBody {
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const rawBody = await request.text();
-
-  if (process.env.QSTASH_TOKEN?.trim()) {
-    const isValid = await verifyQstashRequest(request, rawBody).catch(() => false);
-    if (!isValid) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+  const auth = await requireInternalAuth(request, rawBody);
+  if (!auth.ok) {
+    return auth.response;
   }
 
   let body: WorkerBody;
@@ -59,8 +57,25 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   try {
     const payload = inbox.payload as unknown as DodoWebhookPayload;
-    await stageDodoIntentFromWebhook(payload);
-    await markWebhookProcessed(inbox.id);
+    const { duplicate } = await stageDodoIntentFromWebhook(payload);
+    const result = await atomicProcessDodoWebhook({
+      webhookId: inbox.id,
+      dodoPaymentId: payload.data.payment_id,
+      newStatus: "PENDING_WALLET_LINK",
+      rawPayload: JSON.stringify(payload),
+      metadata: {
+        duplicate,
+        originalStatus: payload.data.status,
+      },
+    });
+
+    if (!result.ok && result.reason !== "already_processed") {
+      throw new Error(result.error ?? "Atomic Dodo webhook processing failed.");
+    }
+
+    if (!result.ok && result.reason === "already_processed") {
+      await markWebhookProcessed(inbox.id);
+    }
     if (retryJob) {
       await completeRetryJob(retryJob.id);
     }

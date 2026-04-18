@@ -141,6 +141,33 @@ model PayoutAttempt {
   @@index([transferId, createdAt])
 }
 
+model AuditLog {
+  id          String   @id @default(cuid())
+  eventType   String
+  entityId    String
+  entityType  String
+  fromState   String?
+  toState     String?
+  metadata    Json?
+  performedBy String?
+  createdAt   DateTime @default(now())
+
+  @@index([entityId])
+  @@index([eventType, createdAt])
+  @@index([entityType, entityId])
+}
+
+model IdempotencyKey {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  result    Json?
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  @@index([key])
+  @@index([expiresAt])
+}
+
 model Account {
   id                String  @id @default(cuid())
   userId            String

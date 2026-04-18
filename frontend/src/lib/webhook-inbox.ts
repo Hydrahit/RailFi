@@ -2,6 +2,7 @@ import "server-only";
 
 import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
+import { getServerRedis } from "@/lib/redis";
 
 export type WebhookProvider = "dodo" | "cashfree" | "helius";
 export type WebhookInboxStatus =
@@ -102,6 +103,24 @@ export async function createRetryJob(args: {
   maxAttempts?: number;
 }) {
   if (!isDatabaseConfigured()) {
+    return null;
+  }
+
+  const webhookId = args.inboxId ?? args.resourceId;
+  const attemptNumber =
+    (await db.retryJob.count({
+      where: {
+        inboxId: args.inboxId,
+        resourceType: args.resourceType,
+        resourceId: args.resourceId,
+        kind: args.kind,
+      },
+    })) + 1;
+  const dedupeKey = `retry:dedup:${webhookId}:attempt:${attemptNumber}`;
+  const redis = getServerRedis("webhook retry dedupe");
+  const isFirst = await redis.set(dedupeKey, "1", { nx: true, ex: 3600 });
+  if (!isFirst) {
+    console.warn("[webhook-inbox] Duplicate retry creation prevented:", dedupeKey);
     return null;
   }
 

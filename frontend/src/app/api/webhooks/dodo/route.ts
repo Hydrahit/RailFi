@@ -1,18 +1,14 @@
 import crypto from "crypto";
 import { Webhook } from "standardwebhooks";
+import { atomicProcessDodoWebhook } from "@/lib/atomic-operations";
 import { stageDodoIntentFromWebhook } from "@/lib/dodo-intents";
 import { publishWorkerJob, isQstashConfigured } from "@/lib/qstash";
-import { getServerRedis } from "@/lib/upstash";
 import { createRetryJob, ingestWebhookEvent, markWebhookFailed } from "@/lib/webhook-inbox";
 import type {
   DodoWebhookPayload,
 } from "@/types/dodo";
 
 export const runtime = "nodejs";
-
-function getRedis() {
-  return getServerRedis("dodo webhook");
-}
 
 function getWebhookVerifier(): Webhook {
   const secret = process.env.DODO_WEBHOOK_SECRET?.trim();
@@ -93,6 +89,24 @@ export async function POST(request: Request): Promise<Response> {
           amountUsd: intent.amountUsd,
           email: intent.customerEmail,
         });
+      }
+
+      if (inbox) {
+        const result = await atomicProcessDodoWebhook({
+          webhookId: inbox.id,
+          dodoPaymentId: payload.data.payment_id,
+          newStatus: "PENDING_WALLET_LINK",
+          rawPayload: rawBody,
+          metadata: {
+            duplicate,
+            originalStatus: payload.data.status,
+          },
+        });
+
+        if (!result.ok && result.reason !== "already_processed") {
+          console.error("[dodo-webhook] Atomic operation failed:", result.reason, result.error);
+          return Response.json({ error: "Processing failed" }, { status: 500 });
+        }
       }
     }
   } catch (error: unknown) {

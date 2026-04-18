@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "../../../../../auth";
-import { db } from "@/lib/db";
+import { atomicLinkWallet } from "@/lib/atomic-operations";
 import { verifyWalletSignature } from "@/lib/siws";
 import { setProfileFlags } from "@/lib/offramp-store";
 import { getRefreshedWalletSessionFromRequest } from "@/lib/wallet-session-server";
@@ -38,6 +38,29 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ error: "Invalid wallet signature." }, { status: 401 });
     }
 
+    try {
+      const parsedMessage = JSON.parse(message) as { issuedAt?: unknown };
+      const issuedAtValue = parsedMessage.issuedAt;
+      const issuedAtTimestamp =
+        typeof issuedAtValue === "string"
+          ? Date.parse(issuedAtValue)
+          : typeof issuedAtValue === "number"
+            ? issuedAtValue
+            : Number.NaN;
+
+      if (
+        Number.isFinite(issuedAtTimestamp) &&
+        Date.now() - issuedAtTimestamp > 5 * 60 * 1000
+      ) {
+        return NextResponse.json(
+          { error: "Signature expired. Please sign again." },
+          { status: 401 },
+        );
+      }
+    } catch {
+      // Backward compatibility: allow legacy non-JSON messages.
+    }
+
     walletAddress = requestedWalletAddress;
   }
 
@@ -48,25 +71,30 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     );
   }
 
-  await setProfileFlags(walletAddress, { googleLinked: true, walletLinked: true });
   if (process.env.DATABASE_URL) {
-    await db.user.upsert({
-      where: { email: session.user.email },
-      update: {
-        walletAddress,
-        walletLinked: true,
-        googleLinked: true,
-      },
-      create: {
-        email: session.user.email,
-        name: session.user.name,
-        image: session.user.image,
-        walletAddress,
-        walletLinked: true,
-        googleLinked: true,
-      },
+    if (!session.user.id) {
+      return NextResponse.json({ error: "Authenticated user is missing an ID." }, { status: 500 });
+    }
+
+    const result = await atomicLinkWallet({
+      userId: session.user.id,
+      walletAddress,
+      performedBy: `user:${session.user.email ?? session.user.id}`,
     });
+
+    if (!result.ok) {
+      if (result.reason === "wallet_taken") {
+        return NextResponse.json(
+          { error: "This wallet is already linked to another account" },
+          { status: 409 },
+        );
+      }
+
+      return NextResponse.json({ error: "Failed to link wallet" }, { status: 500 });
+    }
   }
 
-  return NextResponse.json({ linked: true }, { status: 200 });
+  await setProfileFlags(walletAddress, { googleLinked: true, walletLinked: true });
+
+  return NextResponse.json({ ok: true }, { status: 200 });
 }

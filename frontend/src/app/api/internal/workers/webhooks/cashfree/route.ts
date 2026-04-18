@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
+import {
+  atomicProcessCashfreeWebhook,
+  isAlreadyProcessed,
+} from "@/lib/atomic-operations";
 import { db } from "@/lib/db";
-import { processCashfreeWebhookPayload } from "@/lib/cashfree-webhooks";
-import { verifyQstashRequest } from "@/lib/qstash";
+import { extractCashfreeStatus, extractCashfreeUtr } from "@/lib/cashfree-webhooks";
+import { mapCashfreeStatusToOfframpStatus, writeOfframpDeadLetter } from "@/lib/offramp-store";
+import { requireInternalAuth } from "@/lib/internal-auth";
 import {
   completeRetryJob,
   markRetryJobAttempt,
@@ -21,12 +26,9 @@ interface WorkerBody {
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const rawBody = await request.text();
-
-  if (process.env.QSTASH_TOKEN?.trim()) {
-    const isValid = await verifyQstashRequest(request, rawBody).catch(() => false);
-    if (!isValid) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+  const auth = await requireInternalAuth(request, rawBody);
+  if (!auth.ok) {
+    return auth.response;
   }
 
   let body: WorkerBody;
@@ -58,11 +60,70 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
 
   try {
-    await processCashfreeWebhookPayload(
-      inbox.payload as Record<string, unknown>,
-      JSON.stringify(inbox.payload),
-    );
-    await markWebhookProcessed(inbox.id);
+    const payload = inbox.payload as Record<string, unknown>;
+    const rawPayload = JSON.stringify(inbox.payload);
+    const rawStatus = extractCashfreeStatus(payload) ?? "UNKNOWN";
+    const mappedStatus = mapCashfreeStatusToOfframpStatus(rawStatus);
+    const internalStatus =
+      mappedStatus === "FAILED" || mappedStatus === "REVERSED"
+        ? "REQUIRES_REVIEW"
+        : mappedStatus;
+    const requiresReview =
+      mappedStatus === "FAILED" || mappedStatus === "REVERSED";
+    const utr = extractCashfreeUtr(payload);
+    const idempotencyKey = `webhook:cashfree:${body.transferId}:${internalStatus}`;
+    const { processed } = await isAlreadyProcessed(idempotencyKey);
+
+    if (processed) {
+      await markWebhookProcessed(inbox.id);
+      if (retryJob) {
+        await completeRetryJob(retryJob.id);
+      }
+      return NextResponse.json({ processed: true, replayed: true }, { status: 200 });
+    }
+
+    const result = await atomicProcessCashfreeWebhook({
+      webhookId: inbox.id,
+      transferId: body.transferId,
+      newStatus: internalStatus,
+      utr,
+      requiresReview,
+      rawPayload,
+    });
+
+    if (!result.ok) {
+      if (result.reason === "already_processed") {
+        await markWebhookProcessed(inbox.id);
+        if (retryJob) {
+          await completeRetryJob(retryJob.id);
+        }
+        return NextResponse.json({ processed: true, replayed: true }, { status: 200 });
+      }
+
+      if (result.reason === "record_not_found") {
+        await writeOfframpDeadLetter(
+          body.transferId,
+          rawPayload,
+          "cashfree",
+          "record_not_found_atomic",
+        );
+        await markWebhookFailed(inbox.id, "record_not_found_atomic", true);
+        if (retryJob) {
+          await db.retryJob.update({
+            where: { id: retryJob.id },
+            data: {
+              status: "DEAD_LETTERED",
+              lastError: "record_not_found_atomic",
+              lastAttemptAt: new Date(),
+            },
+          });
+        }
+        return NextResponse.json({ processed: false, queued: "dlq" }, { status: 200 });
+      }
+
+      throw new Error(result.error ?? "Atomic Cashfree webhook processing failed.");
+    }
+
     if (retryJob) {
       await completeRetryJob(retryJob.id);
     }

@@ -1,6 +1,7 @@
 import "server-only";
 
 import { createHash, randomUUID } from "crypto";
+import { fetchWithTimeout, TIMEOUTS } from "@/lib/fetch-with-timeout";
 import { getServerRedis } from "@/lib/upstash";
 import {
   getOfframpRecord,
@@ -8,6 +9,7 @@ import {
   maskUpiId,
   putOfframpRecord,
   updateOfframpRecord,
+  writeOfframpDeadLetter as writeDLQ,
 } from "@/lib/offramp-store";
 import {
   buildExternalPayoutTransferId,
@@ -44,7 +46,7 @@ export interface CashfreePayoutRecord {
   transferId: string;
   walletAddress: string;
   solanaSignature: string | null;
-  upiId: string;
+  upiMasked: string;
   amountMicroUsdc: string;
   inrPaise: string;
   referralPubkey: string | null;
@@ -218,7 +220,7 @@ function mapOfframpRecordToPayoutRecord(record: OfframpRecord): CashfreePayoutRe
     transferId: record.transferId,
     walletAddress: record.walletAddress,
     solanaSignature: record.solanaTx,
-    upiId: record.upiMasked,
+    upiMasked: record.upiMasked,
     amountMicroUsdc: record.amountMicroUsdc,
     inrPaise: String(record.amountInrPaise),
     referralPubkey: record.referralPubkey,
@@ -241,7 +243,7 @@ async function addBeneficiary(args: {
   token: string;
   upiId: string;
 }): Promise<void> {
-  const response = await fetch(`${getCashfreeBaseUrl()}/payout/v1/addBeneficiary`, {
+  const response = await fetchWithTimeout(`${getCashfreeBaseUrl()}/payout/v1/addBeneficiary`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -256,6 +258,7 @@ async function addBeneficiary(args: {
       address1: "RailFi",
     }),
     cache: "no-store",
+    timeoutMs: TIMEOUTS.cashfree,
   });
 
   if (!response.ok) {
@@ -274,7 +277,7 @@ export async function getCashfreeToken(): Promise<string> {
   }
 
   const { clientId, clientSecret } = getCashfreeCredentials();
-  const response = await fetch(`${getCashfreeBaseUrl()}/payout/v1/authorize`, {
+  const response = await fetchWithTimeout(`${getCashfreeBaseUrl()}/payout/v1/authorize`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -282,6 +285,7 @@ export async function getCashfreeToken(): Promise<string> {
       "X-Client-Secret": clientSecret,
     },
     cache: "no-store",
+    timeoutMs: TIMEOUTS.cashfree,
   });
 
   const payload = (await response.json().catch(() => ({}))) as CashfreeAuthorizeResponse;
@@ -335,7 +339,7 @@ export async function recordPayoutQueued(args: {
     transferId: args.transferId,
     walletAddress: args.walletAddress,
     solanaSignature: args.solanaSignature,
-    upiId: args.prepared.upiId,
+    upiMasked: maskUpiId(args.prepared.upiId),
     amountMicroUsdc: args.prepared.amountMicroUsdc,
     inrPaise: args.prepared.inrPaise,
     referralPubkey: args.prepared.referralPubkey,
@@ -395,7 +399,7 @@ export async function initiateUpiPayout(
     });
 
     const amountInr = paiseToInrString(params.inrPaise);
-    const response = await fetch(`${getCashfreeBaseUrl()}/payout/v1/transfer`, {
+    const response = await fetchWithTimeout(`${getCashfreeBaseUrl()}/payout/v1/transfer`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -409,6 +413,7 @@ export async function initiateUpiPayout(
         remarks: `RailFi payout for ${params.solanaSignature}`,
       }),
       cache: "no-store",
+      timeoutMs: TIMEOUTS.cashfree,
     });
 
     const payload = (await response.json().catch(() => ({}))) as CashfreeTransferResponse;
@@ -510,7 +515,7 @@ export async function getPayoutStatus(transferId: string): Promise<CashfreePayou
 
   try {
     const token = await getCashfreeToken();
-    const response = await fetch(
+    const response = await fetchWithTimeout(
       `${getCashfreeBaseUrl()}/payout/v1/transfer/status?transferId=${encodeURIComponent(externalTransferId)}`,
       {
         method: "GET",
@@ -518,6 +523,7 @@ export async function getPayoutStatus(transferId: string): Promise<CashfreePayou
           Authorization: `Bearer ${token}`,
         },
         cache: "no-store",
+        timeoutMs: TIMEOUTS.cashfree,
       },
     );
 
@@ -576,31 +582,29 @@ export async function updatePayoutRecordFromWebhook(args: {
   status: string | null | undefined;
   utr: string | null | undefined;
 }): Promise<CashfreePayoutRecord | null> {
+  const existing = await readPayoutRecord(args.transferId);
+  if (!existing) {
+    const payload = args;
+    console.error(
+      "[cashfree-payout] Orphaned webhook — no matching record for transferId:",
+      args.transferId,
+    );
+    await writeDLQ(
+      args.transferId,
+      JSON.stringify(payload),
+      "cashfree",
+      "no_matching_payout_record",
+    );
+    return null;
+  }
+
   const payoutRecord = await updatePayoutRecord(args.transferId, (current) => {
     const now = Math.floor(Date.now() / 1000);
-    if (!current) {
-      return {
-        transferId: args.transferId,
-        walletAddress: "unknown",
-        solanaSignature: null,
-        upiId: "",
-        amountMicroUsdc: "0",
-        inrPaise: "0",
-        referralPubkey: null,
-        amountInr: "0.00",
-        status: normalizeCashfreeStatus(args.status),
-        cashfreeTransferId: args.transferId,
-        utr: args.utr ?? null,
-        createdAt: now,
-        updatedAt: now,
-      };
-    }
-
     return {
-      ...current,
+      ...current!,
       status: normalizeCashfreeStatus(args.status),
-      utr: args.utr ?? current.utr,
-      cashfreeTransferId: current.cashfreeTransferId ?? args.transferId,
+      utr: args.utr ?? current!.utr,
+      cashfreeTransferId: current!.cashfreeTransferId ?? args.transferId,
       updatedAt: now,
     };
   });

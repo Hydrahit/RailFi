@@ -1,8 +1,9 @@
 import "server-only";
 
 import { Connection } from "@solana/web3.js";
+import { atomicReconcileAction } from "@/lib/atomic-operations";
 import { db } from "@/lib/db";
-import { getOfframpRecord, updateOfframpRecord } from "@/lib/offramp-store";
+import { getOfframpRecord } from "@/lib/offramp-store";
 import {
   buildExternalPayoutTransferId,
   createPayoutAttempt,
@@ -16,6 +17,7 @@ import { getPrimarySolanaRpcUrl, getSecondarySolanaRpcUrl } from "@/lib/server-e
 
 const STALE_RELAY_MS = 5 * 60 * 1000;
 const STALE_PAYOUT_MS = 5 * 60 * 1000;
+const SOLANA_TX_CHECK_TIMEOUT_MS = 8_000;
 
 export interface ReconciliationSummary {
   checkedDodo: number;
@@ -72,6 +74,101 @@ export async function runReconciliation(): Promise<ReconciliationSummary> {
     }
 
     if (audit.status === "RELAY_EXECUTING" && staleBy > STALE_RELAY_MS) {
+      if (!audit.solanaTx) {
+        console.warn("[reconcile] RELAY_EXECUTING audit has no solanaTx; leaving for next pass.", {
+          dodoPaymentId: audit.dodoPaymentId,
+        });
+        await db.dodoSettlementAudit.update({
+          where: { id: audit.id },
+          data: {
+            retryCount: { increment: 1 },
+            lastRetryAt: new Date(),
+          },
+        });
+        continue;
+      }
+
+      const rpcUrl = process.env.SOLANA_RPC_URL?.trim();
+      if (!rpcUrl) {
+        console.warn("[reconcile] SOLANA_RPC_URL is not configured; leaving RELAY_EXECUTING for next pass.", {
+          dodoPaymentId: audit.dodoPaymentId,
+          solanaTx: audit.solanaTx,
+        });
+        await db.dodoSettlementAudit.update({
+          where: { id: audit.id },
+          data: {
+            retryCount: { increment: 1 },
+            lastRetryAt: new Date(),
+          },
+        });
+        continue;
+      }
+
+      const connection = new Connection(rpcUrl, "confirmed");
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), SOLANA_TX_CHECK_TIMEOUT_MS);
+
+      try {
+        const transaction = await Promise.race([
+          connection.getTransaction(audit.solanaTx, {
+            commitment: "confirmed",
+            maxSupportedTransactionVersion: 0,
+          }),
+          new Promise<null>((_, reject) => {
+            controller.signal.addEventListener(
+              "abort",
+              () => reject(new Error(`Timed out after ${SOLANA_TX_CHECK_TIMEOUT_MS}ms`)),
+              { once: true },
+            );
+          }),
+        ]);
+
+        if (transaction && !transaction.meta?.err) {
+          await db.dodoSettlementAudit.update({
+            where: { id: audit.id },
+            data: {
+              status: "RELAY_CONFIRMED",
+              failureReason: null,
+            },
+          });
+          console.warn("[reconcile] Fixed lagging status for confirmed tx:", audit.solanaTx);
+          continue;
+        }
+
+        const nextRetryCount = audit.retryCount + 1;
+        if (nextRetryCount < 3) {
+          console.warn("[reconcile] Solana transaction not found yet; leaving RELAY_EXECUTING for next pass.", {
+            dodoPaymentId: audit.dodoPaymentId,
+            solanaTx: audit.solanaTx,
+            retryCount: nextRetryCount,
+          });
+          await db.dodoSettlementAudit.update({
+            where: { id: audit.id },
+            data: {
+              retryCount: { increment: 1 },
+              lastRetryAt: new Date(),
+            },
+          });
+          continue;
+        }
+      } catch (error) {
+        console.warn("[reconcile] Unable to verify RELAY_EXECUTING transaction; leaving for next pass.", {
+          dodoPaymentId: audit.dodoPaymentId,
+          solanaTx: audit.solanaTx,
+          error: error instanceof Error ? error.message : error,
+        });
+        await db.dodoSettlementAudit.update({
+          where: { id: audit.id },
+          data: {
+            retryCount: { increment: 1 },
+            lastRetryAt: new Date(),
+          },
+        });
+        continue;
+      } finally {
+        clearTimeout(timeout);
+      }
+
       await db.dodoSettlementAudit.update({
         where: { id: audit.id },
         data: {
@@ -97,26 +194,11 @@ export async function runReconciliation(): Promise<ReconciliationSummary> {
     if ((offramp.status === "FAILED" || offramp.status === "REQUIRES_REVIEW") && !offramp.utr && ageMs > STALE_PAYOUT_MS) {
       const payoutRecord = await getStoredPayoutRecord(offramp.transferId);
 
-      if (payoutRecord?.upiId) {
-        const retryCount = offramp.retryCount + 1;
-        const externalTransferId = buildExternalPayoutTransferId(offramp.transferId, retryCount);
-        await createPayoutAttempt({
+      if (payoutRecord?.upiMasked) {
+        console.warn("[reconcile] Skipping Cashfree retry because only masked UPI is stored.", {
           transferId: offramp.transferId,
-          externalTransferId,
-          kind: "cashfree-retry",
+          upiMasked: payoutRecord.upiMasked,
         });
-        await initiateUpiPayout({
-          transferId: offramp.transferId,
-          walletAddress: offramp.walletAddress,
-          solanaSignature: offramp.solanaTx,
-          upiId: payoutRecord.upiId,
-          amountMicroUsdc: offramp.amountMicroUsdc,
-          inrPaise: String(offramp.amountInrPaise),
-          referralPubkey: offramp.referralPubkey,
-          externalTransferId,
-          attemptKind: "cashfree-retry",
-        });
-        summary.retriedPayouts += 1;
         continue;
       }
     }
@@ -144,18 +226,23 @@ export async function runReconciliation(): Promise<ReconciliationSummary> {
         (secondaryStatus.status === "fulfilled" && secondaryStatus.value.value?.confirmationStatus);
 
       if (!hasConfirmed) {
-        await updateOfframpRecord(offramp.transferId, (current) =>
-          current
-            ? {
-                ...current,
-                status: "REQUIRES_REVIEW",
-                requiresReview: true,
-                failureReason: "Primary and secondary RPC could not confirm the on-chain signature.",
-                retryCount: (current.retryCount ?? 0) + 1,
-                lastRetryAt: new Date().toISOString(),
-              }
-            : null,
-        );
+        const result = await atomicReconcileAction({
+          transferId: offramp.transferId,
+          fromStatus: offramp.status,
+          toStatus: "REQUIRES_REVIEW",
+          reason: "primary_secondary_rpc_unconfirmed",
+          evidence: {
+            solanaTx: offramp.solanaTx,
+            checkedAt: new Date().toISOString(),
+          },
+        });
+
+        if (!result.ok) {
+          console.warn(
+            `[reconcile] Could not apply decision for ${offramp.transferId}:`,
+            result.reason,
+          );
+        }
       }
     }
   }

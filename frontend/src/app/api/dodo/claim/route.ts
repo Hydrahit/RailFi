@@ -1,6 +1,8 @@
 import { Ratelimit } from "@upstash/ratelimit";
 import { NextRequest } from "next/server";
 import { auth } from "../../../../../auth";
+import { fetchWithTimeout, TIMEOUTS } from "@/lib/fetch-with-timeout";
+import { getUsdInrRate } from "@/lib/fxrate";
 import { getServerRedis } from "@/lib/upstash";
 import { getRefreshedWalletSessionFromRequest } from "@/lib/wallet-session-server";
 import type { DodoOfframpIntent } from "@/types/dodo";
@@ -53,8 +55,9 @@ function getRedis() {
 }
 
 async function fetchPythUsdcPrice(): Promise<number> {
-  const res = await fetch(PYTH_HERMES_URL, {
+  const res = await fetchWithTimeout(PYTH_HERMES_URL, {
     next: { revalidate: 0 },
+    timeoutMs: TIMEOUTS.coingecko,
   });
 
   if (!res.ok) {
@@ -100,8 +103,9 @@ async function fetchPythUsdcPrice(): Promise<number> {
 }
 
 async function fetchCoinGeckoUsdcPrice(): Promise<number> {
-  const res = await fetch(COINGECKO_USDC_URL, {
+  const res = await fetchWithTimeout(COINGECKO_USDC_URL, {
     cache: "no-store",
+    timeoutMs: TIMEOUTS.coingecko,
   });
 
   if (!res.ok) {
@@ -242,7 +246,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
 
   const usdcAmount = Math.floor((intent.amountUsd / usdcPrice) * 1_000_000);
-  const usdInrIndicative = 83.5;
+  const { rate: usdInrIndicative } = await getUsdInrRate();
   const inrQuote = Math.floor(intent.amountUsd * usdInrIndicative * 100);
   const updatedIntent: DodoOfframpIntent = {
     ...intent,
