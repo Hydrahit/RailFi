@@ -194,13 +194,18 @@ export async function runReconciliation(): Promise<ReconciliationSummary> {
     if ((offramp.status === "FAILED" || offramp.status === "REQUIRES_REVIEW") && !offramp.utr && ageMs > STALE_PAYOUT_MS) {
       const payoutRecord = await getStoredPayoutRecord(offramp.transferId);
 
-      if (payoutRecord?.upiMasked) {
-        console.warn("[reconcile] Skipping Cashfree retry because only masked UPI is stored.", {
+      if (!payoutRecord || !offramp.cashfreeId) {
+        console.warn("[reconcile] Skipping Cashfree retry because payout identity is incomplete.", {
           transferId: offramp.transferId,
-          upiMasked: payoutRecord.upiMasked,
+          hasPayoutRecord: !!payoutRecord,
+          cashfreeId: offramp.cashfreeId,
         });
         continue;
       }
+
+      await getPayoutStatus(offramp.transferId);
+      summary.retriedPayouts += 1;
+      continue;
     }
 
     if (offramp.status === "ON_CHAIN_CONFIRMED" && !offramp.completedAt) {

@@ -23,18 +23,24 @@ export async function requireInternalAuth(
   req: NextRequest,
   rawBody: string,
 ): Promise<{ ok: true } | { ok: false; response: NextResponse }> {
-  if (!process.env.QSTASH_CURRENT_SIGNING_KEY?.trim()) {
-    return {
-      ok: false,
-      response: NextResponse.json(
-        { error: "QStash signing key is not configured." },
-        { status: 503 },
-      ),
-    };
+  const internalSecret = process.env.INTERNAL_WORKER_SECRET?.trim();
+  const providedSecret = req.headers.get("x-internal-secret")?.trim();
+  if (internalSecret && providedSecret === internalSecret) {
+    return { ok: true };
   }
 
   const qstashSignature = req.headers.get("upstash-signature")?.trim();
   if (qstashSignature) {
+    if (!process.env.QSTASH_CURRENT_SIGNING_KEY?.trim()) {
+      return {
+        ok: false,
+        response: NextResponse.json(
+          { error: "QStash signing key is not configured." },
+          { status: 503 },
+        ),
+      };
+    }
+
     try {
       const isValid = await getReceiver().verify({
         signature: qstashSignature,
@@ -51,12 +57,6 @@ export async function requireInternalAuth(
         response: NextResponse.json({ error: "Unauthorized" }, { status: 401 }),
       };
     }
-  }
-
-  const internalSecret = process.env.INTERNAL_WORKER_SECRET?.trim();
-  const providedSecret = req.headers.get("x-internal-secret")?.trim();
-  if (internalSecret && providedSecret === internalSecret) {
-    return { ok: true };
   }
 
   return {
