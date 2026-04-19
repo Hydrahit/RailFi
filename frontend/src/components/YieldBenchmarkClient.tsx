@@ -193,8 +193,9 @@ export function YieldBenchmarkClient() {
             {snapshot ? formatInr(snapshot.projectedMonthlyYieldInr) : "--"}
           </div>
           <p className="text-heavy-secondary mt-2 text-[12px]">
-            INR estimate uses a benchmark conversion of {snapshot?.benchmarkUsdInr ?? 83.5} INR
-            per USD-equivalent USDC yield.
+            INR estimate uses a benchmark conversion of{" "}
+            {snapshot ? snapshot.benchmarkUsdInr.toFixed(2) : "--"} INR per USD-equivalent
+            USDC yield.
           </p>
         </article>
       </section>

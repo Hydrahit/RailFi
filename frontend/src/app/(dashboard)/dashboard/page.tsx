@@ -14,6 +14,7 @@ import { DashboardPageSkeleton } from "@/components/ui/AppSkeletons";
 import { AnimatedNumber } from "@/components/ui/AnimatedNumber";
 import { RefreshButton } from "@/components/ui/RefreshButton";
 import { StatusPill } from "@/components/ui/StatusPill";
+import { useUsdInrReference } from "@/hooks/useUsdInrReference";
 
 const CircuitBreakerStatus = dynamic(
   () => import("@/components/CircuitBreakerStatus").then((mod) => mod.CircuitBreakerStatus),
@@ -39,20 +40,20 @@ const ReferralDashboard = dynamic(
   },
 );
 
-const MOCK_RATE = 83.5;
-
 export default function DashboardPage() {
   const { publicKey } = useWallet();
   const { balances, vault, refreshBalances, refreshVault, isBootstrapping } =
     useRailpayContext();
   const [animationSeed, setAnimationSeed] = useState(0);
+  const usdInrReference = useUsdInrReference();
   const showBootSkeleton = useMinimumLoading(isBootstrapping, 300);
 
   if (showBootSkeleton) {
     return <DashboardPageSkeleton />;
   }
 
-  const walletInrEstimate = balances.usdc * MOCK_RATE;
+  const walletInrEstimate =
+    typeof usdInrReference === "number" ? balances.usdc * usdInrReference : null;
   const stats = [
     {
       label: "Vault available",
@@ -142,18 +143,22 @@ export default function DashboardPage() {
               </div>
               <p className="mt-3 max-w-xl text-[14px] leading-6 text-[var(--text-2)]">
                 Approx.{" "}
-                <AnimatedNumber
-                  value={walletInrEstimate}
-                  animateKey={animationSeed}
-                  formatValue={(value) =>
-                    new Intl.NumberFormat("en-IN", {
-                      style: "currency",
-                      currency: "INR",
-                      minimumFractionDigits: 2,
-                      maximumFractionDigits: 2,
-                    }).format(value)
-                  }
-                />{" "}
+                {walletInrEstimate === null ? (
+                  "live INR estimate unavailable"
+                ) : (
+                  <AnimatedNumber
+                    value={walletInrEstimate}
+                    animateKey={animationSeed}
+                    formatValue={(value) =>
+                      new Intl.NumberFormat("en-IN", {
+                        style: "currency",
+                        currency: "INR",
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      }).format(value)
+                    }
+                  />
+                )}{" "}
                 at the current reference rate. Vault,
                 oracle, and circuit-breaker posture stays visible below for confident settlement actions.
               </p>

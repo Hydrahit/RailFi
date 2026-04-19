@@ -5,6 +5,7 @@ import { cache } from "react";
 import bs58 from "bs58";
 import { getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { clusterApiUrl, Connection, PublicKey } from "@solana/web3.js";
+import { getUsdInrRate } from "@/lib/fxrate";
 import { CONFIGURED_USDC_MINT, PROGRAM_ID, deriveProtocolConfigPda } from "@/lib/solana";
 import { assertNoForbiddenPublicSecrets, getServerHeliusRpcUrl } from "@/lib/server-env";
 
@@ -12,7 +13,6 @@ const MAINNET_KAMINO_MARKET = "7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF";
 const MAINNET_USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const RECENT_SLOT_DURATION_MS = 400;
 const ACCOUNT_BATCH_SIZE = 100;
-const BENCHMARK_USD_INR = 83.5;
 const CACHE_TTL_MS = 60_000;
 const FALLBACK_APY_PERCENT = 5.5;
 const FALLBACK_IDLE_TVL_USDC = 12_500;
@@ -124,10 +124,13 @@ function decodeProtocolConfig(data: Buffer): ProtocolConfigSnapshot {
   return { usdcMint, oracleMaxAge, kaminoEnabled };
 }
 
-function buildFallbackSnapshot(totalIdleTvlUsdc = FALLBACK_IDLE_TVL_USDC): YieldSnapshot {
+async function buildFallbackSnapshot(
+  totalIdleTvlUsdc = FALLBACK_IDLE_TVL_USDC,
+): Promise<YieldSnapshot> {
+  const { rate: benchmarkUsdInr } = await getUsdInrRate();
   const apyPercent = FALLBACK_APY_PERCENT;
   const projectedMonthlyYieldUsdc = totalIdleTvlUsdc * (apyPercent / 100 / 12);
-  const projectedMonthlyYieldInr = projectedMonthlyYieldUsdc * BENCHMARK_USD_INR;
+  const projectedMonthlyYieldInr = projectedMonthlyYieldUsdc * benchmarkUsdInr;
 
   return {
     kaminoEnabled: false,
@@ -137,7 +140,7 @@ function buildFallbackSnapshot(totalIdleTvlUsdc = FALLBACK_IDLE_TVL_USDC): Yield
     totalIdleTvlUsdc,
     projectedMonthlyYieldUsdc,
     projectedMonthlyYieldInr,
-    benchmarkUsdInr: BENCHMARK_USD_INR,
+    benchmarkUsdInr,
     mode: "benchmark_only",
     generatedAt: new Date().toISOString(),
   };
@@ -260,7 +263,7 @@ export const getYieldSnapshot = cache(async (): Promise<YieldSnapshot> => {
     }
 
     console.warn("[yield] Orca/Kamino WASM unavailable; returning fallback benchmark snapshot.", error);
-    const fallbackSnapshot = buildFallbackSnapshot(totalIdleTvlUsdc);
+    const fallbackSnapshot = await buildFallbackSnapshot(totalIdleTvlUsdc);
     cachedSnapshot = {
       value: fallbackSnapshot,
       expiresAt: Date.now() + CACHE_TTL_MS,
@@ -268,8 +271,9 @@ export const getYieldSnapshot = cache(async (): Promise<YieldSnapshot> => {
     return fallbackSnapshot;
   }
 
+  const { rate: benchmarkUsdInr } = await getUsdInrRate();
   const projectedMonthlyYieldUsdc = totalIdleTvlUsdc * (apyPercent / 100 / 12);
-  const projectedMonthlyYieldInr = projectedMonthlyYieldUsdc * BENCHMARK_USD_INR;
+  const projectedMonthlyYieldInr = projectedMonthlyYieldUsdc * benchmarkUsdInr;
   const snapshot: YieldSnapshot = {
     kaminoEnabled: protocolConfig.kaminoEnabled,
     apyBps: Math.round(apyPercent * 100),
@@ -278,7 +282,7 @@ export const getYieldSnapshot = cache(async (): Promise<YieldSnapshot> => {
     totalIdleTvlUsdc,
     projectedMonthlyYieldUsdc,
     projectedMonthlyYieldInr,
-    benchmarkUsdInr: BENCHMARK_USD_INR,
+    benchmarkUsdInr,
     mode: "benchmark_only",
     generatedAt: new Date().toISOString(),
   };
@@ -291,6 +295,6 @@ export const getYieldSnapshot = cache(async (): Promise<YieldSnapshot> => {
   return snapshot;
 });
 
-export function getYieldFallbackSnapshot(): YieldSnapshot {
+export async function getYieldFallbackSnapshot(): Promise<YieldSnapshot> {
   return buildFallbackSnapshot();
 }

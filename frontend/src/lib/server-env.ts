@@ -1,6 +1,7 @@
 import "server-only";
 
 import { clusterApiUrl } from "@solana/web3.js";
+import { isBuildPhase } from "@/lib/public-env";
 
 const FORBIDDEN_PUBLIC_ENV_NAMES = [
   "NEXT_PUBLIC_HELIUS_API_KEY",
@@ -52,6 +53,10 @@ export function getServerHeliusApiKey(): string {
   assertNoForbiddenPublicSecrets();
   const apiKey = process.env.HELIUS_API_KEY?.trim();
   if (!apiKey) {
+    if (isBuildPhase()) {
+      console.warn("[env] HELIUS_API_KEY not set during build - using placeholder.");
+      return "build-placeholder";
+    }
     throw new Error("HELIUS_API_KEY is not configured.");
   }
   return apiKey;
@@ -61,6 +66,10 @@ export function getServerHeliusRpcUrl(): string {
   assertNoForbiddenPublicSecrets();
   const rpcUrl = process.env.HELIUS_RPC_URL?.trim();
   if (!rpcUrl) {
+    if (isBuildPhase()) {
+      console.warn("[env] HELIUS_RPC_URL not set during build - using devnet fallback.");
+      return clusterApiUrl("devnet");
+    }
     throw new Error("HELIUS_RPC_URL is not configured.");
   }
   return rpcUrl;

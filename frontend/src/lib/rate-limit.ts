@@ -2,6 +2,7 @@ import "server-only";
 
 import { Ratelimit } from "@upstash/ratelimit";
 import type { NextRequest } from "next/server";
+import { isBuildPhase } from "@/lib/public-env";
 import { getServerRedis } from "@/lib/upstash";
 
 type LimiterName =
@@ -112,7 +113,16 @@ export async function enforceIpRateLimit(
   name: LimiterName,
   message: string,
 ): Promise<RateLimitResult> {
-  const result = await getLimiter(name).limit(normalizeKeyPart(getClientIpAddress(request)));
+  let result;
+  try {
+    result = await getLimiter(name).limit(normalizeKeyPart(getClientIpAddress(request)));
+  } catch (error) {
+    if (isBuildPhase()) {
+      console.warn(`[rate-limit] ${name} unavailable during build - skipping rate limit.`, error);
+      return { allowed: true };
+    }
+    throw error;
+  }
   if (!result.success) {
     return {
       allowed: false,
@@ -128,7 +138,16 @@ export async function enforceWalletRateLimit(
   name: LimiterName,
   message: string,
 ): Promise<RateLimitResult> {
-  const result = await getLimiter(name).limit(normalizeKeyPart(walletAddress));
+  let result;
+  try {
+    result = await getLimiter(name).limit(normalizeKeyPart(walletAddress));
+  } catch (error) {
+    if (isBuildPhase()) {
+      console.warn(`[rate-limit] ${name} unavailable during build - skipping rate limit.`, error);
+      return { allowed: true };
+    }
+    throw error;
+  }
   if (!result.success) {
     return {
       allowed: false,

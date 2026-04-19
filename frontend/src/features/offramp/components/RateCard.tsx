@@ -2,13 +2,14 @@
 
 import type { RateTier } from "@/types/railpay";
 import { cn } from "@/lib/utils";
+import { useUsdInrReference } from "@/hooks/useUsdInrReference";
 import { StatusPill } from "@/components/ui/StatusPill";
 
 const RATE_TIERS: RateTier[] = [
-  { label: "Micro", minUsdc: 0, maxUsdc: 10, rateInr: 83.5, feePercent: 1.5 },
-  { label: "Standard", minUsdc: 10, maxUsdc: 100, rateInr: 83.5, feePercent: 1 },
-  { label: "Pro", minUsdc: 100, maxUsdc: 1000, rateInr: 83.5, feePercent: 0.75, badge: "Priority" },
-  { label: "Whale", minUsdc: 1000, maxUsdc: null, rateInr: 83.5, feePercent: 0.5, badge: "Concierge" },
+  { label: "Micro", minUsdc: 0, maxUsdc: 10, feePercent: 1.5 },
+  { label: "Standard", minUsdc: 10, maxUsdc: 100, feePercent: 1 },
+  { label: "Pro", minUsdc: 100, maxUsdc: 1000, feePercent: 0.75, badge: "Priority" },
+  { label: "Whale", minUsdc: 1000, maxUsdc: null, feePercent: 0.5, badge: "Concierge" },
 ];
 
 interface RateCardProps {
@@ -16,6 +17,7 @@ interface RateCardProps {
 }
 
 export function RateCard({ amount = 0 }: RateCardProps) {
+  const usdInrReference = useUsdInrReference();
   const activeTier = RATE_TIERS.findIndex(
     (tier) => amount >= tier.minUsdc && (tier.maxUsdc === null || amount < tier.maxUsdc),
   );
@@ -33,7 +35,9 @@ export function RateCard({ amount = 0 }: RateCardProps) {
         </div>
         <StatusPill tone="success">
           <span className="h-2 w-2 rounded-full bg-[var(--green)] pulse-dot" />
-          Rs 83.50 / USDC reference
+          {usdInrReference === null
+            ? "Live FX reference"
+            : `Rs ${usdInrReference.toFixed(2)} / USDC reference`}
         </StatusPill>
       </div>
 

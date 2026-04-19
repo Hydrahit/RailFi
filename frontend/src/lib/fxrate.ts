@@ -21,8 +21,14 @@ export async function getUsdInrRate(): Promise<{
   rate: number;
   source: "cache" | "coingecko" | "fallback";
 }> {
-  const redis = getServerRedis("USD/INR FX rate");
-  const cachedRate = await redis.get<number | string>(FX_CACHE_KEY);
+  let cachedRate: number | string | null = null;
+  let redis: ReturnType<typeof getServerRedis> | null = null;
+  try {
+    redis = getServerRedis("USD/INR FX rate");
+    cachedRate = await redis.get<number | string>(FX_CACHE_KEY);
+  } catch (error: unknown) {
+    console.warn("[fxrate] Redis unavailable; continuing without FX cache.", error);
+  }
   const parsedCachedRate =
     typeof cachedRate === "number"
       ? cachedRate
@@ -54,7 +60,9 @@ export async function getUsdInrRate(): Promise<{
       throw new Error("CoinGecko returned an invalid USD/INR rate");
     }
 
-    await redis.setex(FX_CACHE_KEY, FX_CACHE_TTL_SECONDS, rate);
+    if (redis) {
+      await redis.setex(FX_CACHE_KEY, FX_CACHE_TTL_SECONDS, rate);
+    }
     return { rate, source: "coingecko" };
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Unknown FX fetch error";

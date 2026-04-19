@@ -18,13 +18,6 @@ const COINGECKO_USDC_URL =
 const UPI_HANDLE_REGEX = /^[a-zA-Z0-9._-]+@[a-zA-Z0-9]+$/;
 const MAX_PRICE_DEVIATION_RATIO = 0.01;
 
-const claimLimiter = new Ratelimit({
-  redis: getServerRedis("dodo claim rate limiting"),
-  limiter: Ratelimit.slidingWindow(5, "60 s"),
-  prefix: "railfi:ratelimit:dodo-claim:wallet",
-  analytics: false,
-});
-
 interface ClaimRequestBody {
   dodoPaymentId: string;
   upiHandle: string;
@@ -52,6 +45,15 @@ interface CoinGeckoPriceResponse {
 
 function getRedis() {
   return getServerRedis("dodo claim");
+}
+
+function getClaimLimiter(): Ratelimit {
+  return new Ratelimit({
+    redis: getServerRedis("dodo claim rate limiting"),
+    limiter: Ratelimit.slidingWindow(5, "60 s"),
+    prefix: "railfi:ratelimit:dodo-claim:wallet",
+    analytics: false,
+  });
 }
 
 async function fetchPythUsdcPrice(): Promise<number> {
@@ -150,7 +152,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     );
   }
 
-  const rateLimit = await claimLimiter.limit(walletAddress.trim().toLowerCase());
+  const rateLimit = await getClaimLimiter().limit(walletAddress.trim().toLowerCase());
 
   if (!rateLimit.success) {
     return Response.json(

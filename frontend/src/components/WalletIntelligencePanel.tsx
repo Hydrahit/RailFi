@@ -7,6 +7,7 @@ import { ArrowUpRight, Check, ExternalLink, RefreshCw } from "lucide-react";
 import { explorerTx } from "@/lib/solana";
 import { useMinimumLoading } from "@/hooks/useMinimumLoading";
 import { useToast } from "@/hooks/useToast";
+import { useUsdInrReference } from "@/hooks/useUsdInrReference";
 import { WalletDashboardSkeleton } from "@/components/ui/AppSkeletons";
 import { AnimatedNumber } from "@/components/ui/AnimatedNumber";
 import { TaxExportButton } from "@/components/TaxExportButton";
@@ -81,7 +82,6 @@ interface WalletDashboardResponse {
   zkHistory: DashboardZkRecord[];
 }
 
-const MOCK_RATE = 83.5;
 const ZK_STATUS_LABELS = {
   0: "PENDING",
   1: "SETTLED",
@@ -102,6 +102,7 @@ export function WalletIntelligencePanel() {
   const { publicKey } = useWallet();
   const { ensureSession } = useWalletSession();
   const { showToast } = useToast();
+  const usdInrReference = useUsdInrReference();
   const [tab, setTab] = useState<TabKey>("ledger");
   const [balance, setBalance] = useState(0);
   const [transactions, setTransactions] = useState<DashboardTransaction[]>([]);
@@ -259,7 +260,8 @@ export function WalletIntelligencePanel() {
     return <WalletDashboardSkeleton />;
   }
 
-  const estimatedInr = balance * MOCK_RATE;
+  const estimatedInr =
+    typeof usdInrReference === "number" ? balance * usdInrReference : null;
   const isRefreshing = refreshState === "loading";
 
   return (
@@ -299,16 +301,20 @@ export function WalletIntelligencePanel() {
         <div className="flex flex-wrap items-center gap-2 text-[12px] text-[var(--text-2)]">
           <span className="tabular-nums">
             INR{" "}
-            <AnimatedNumber
-              value={estimatedInr}
-              animateKey={`wallet-panel-inr-${animationSeed}-${estimatedInr}`}
-              formatValue={(value) =>
-                value.toLocaleString("en-IN", {
-                  minimumFractionDigits: 2,
-                  maximumFractionDigits: 2,
-                })
-              }
-            />
+            {estimatedInr === null ? (
+              "--"
+            ) : (
+              <AnimatedNumber
+                value={estimatedInr}
+                animateKey={`wallet-panel-inr-${animationSeed}-${estimatedInr}`}
+                formatValue={(value) =>
+                  value.toLocaleString("en-IN", {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  })
+                }
+              />
+            )}
           </span>
           <span aria-hidden="true">/</span>
           <span>Devnet</span>

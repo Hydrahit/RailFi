@@ -22,7 +22,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     });
   } catch (error) {
     console.error("[yield] failed:", error);
-    return NextResponse.json(getYieldFallbackSnapshot(), {
+    return NextResponse.json(await getYieldFallbackSnapshot(), {
       status: 200,
       headers: {
         "Cache-Control": "s-maxage=60, stale-while-revalidate=300",

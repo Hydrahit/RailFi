@@ -113,7 +113,6 @@ export interface RateTier {
   label:       string;
   minUsdc:     number;
   maxUsdc:     number | null;  // null = unlimited
-  rateInr:     number;         // INR per USDC
   feePercent:  number;
   badge?:      string;
 }

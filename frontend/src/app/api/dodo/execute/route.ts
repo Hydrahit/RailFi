@@ -14,13 +14,6 @@ import type { DodoOfframpIntent } from "@/types/dodo";
 
 export const runtime = "nodejs";
 
-const executeLimiter = new Ratelimit({
-  redis: getServerRedis("dodo execute rate limiting"),
-  limiter: Ratelimit.slidingWindow(3, "60 s"),
-  prefix: "railfi:ratelimit:dodo-execute:wallet",
-  analytics: false,
-});
-
 interface ExecuteRequestBody {
   dodoPaymentId: string;
 }
@@ -33,6 +26,15 @@ const EXECUTION_LOCK_TTL_SECONDS = 120;
 
 function getRedis() {
   return getServerRedis("dodo execute");
+}
+
+function getExecuteLimiter(): Ratelimit {
+  return new Ratelimit({
+    redis: getServerRedis("dodo execute rate limiting"),
+    limiter: Ratelimit.slidingWindow(3, "60 s"),
+    prefix: "railfi:ratelimit:dodo-execute:wallet",
+    analytics: false,
+  });
 }
 
 function cloneRelayHeaders(request: Request): Headers {
@@ -207,7 +209,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     );
   }
 
-  const rateLimit = await executeLimiter.limit(walletAddress.trim().toLowerCase());
+  const rateLimit = await getExecuteLimiter().limit(walletAddress.trim().toLowerCase());
 
   if (!rateLimit.success) {
     return Response.json(
