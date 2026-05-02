@@ -5,6 +5,7 @@ import { PrismaAdapter } from "@auth/prisma-adapter";
 import { db } from "@/lib/db";
 import { verifyWalletSignature } from "@/lib/siws";
 import { setProfileFlags } from "@/lib/offramp-store";
+import { enforceAuthorizeWalletRateLimit } from "@/lib/auth";
 
 const useAdapter = !!process.env.DATABASE_URL;
 
@@ -28,6 +29,9 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       async authorize(credentials) {
         const walletAddress =
           typeof credentials?.walletAddress === "string" ? credentials.walletAddress.trim() : "";
+        // SECURITY: Rate-limit by wallet before signature verification to blunt credential brute-force attempts.
+        await enforceAuthorizeWalletRateLimit(walletAddress || undefined);
+
         const message = typeof credentials?.message === "string" ? credentials.message.trim() : "";
         const signature =
           typeof credentials?.signature === "string" ? credentials.signature.trim() : "";

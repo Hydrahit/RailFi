@@ -17,6 +17,7 @@ export interface OfframpRecord {
   amountInr: number;
   amountInrPaise: number;
   upiMasked: string;
+  upiId?: string | null;
   upiHash?: string | null;
   status: OfframpStatus;
   utr: string | null;

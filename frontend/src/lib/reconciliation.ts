@@ -5,13 +5,8 @@ import { atomicReconcileAction } from "@/lib/atomic-operations";
 import { db } from "@/lib/db";
 import { getOfframpRecord } from "@/lib/offramp-store";
 import {
-  buildExternalPayoutTransferId,
-  createPayoutAttempt,
-} from "@/lib/payout-attempts";
-import {
-  getPayoutStatus,
-  getStoredPayoutRecord,
   initiateUpiPayout,
+  getPayoutStatus,
 } from "@/services/cashfree/payout";
 import { getPrimarySolanaRpcUrl, getSecondarySolanaRpcUrl } from "@/lib/server-env";
 
@@ -192,18 +187,54 @@ export async function runReconciliation(): Promise<ReconciliationSummary> {
     }
 
     if ((offramp.status === "FAILED" || offramp.status === "REQUIRES_REVIEW") && !offramp.utr && ageMs > STALE_PAYOUT_MS) {
-      const payoutRecord = await getStoredPayoutRecord(offramp.transferId);
+      const canonicalOfframp = await getOfframpRecord(offramp.transferId);
+      const retryCount = (offramp.retryCount ?? 0) + 1;
+      const MAX_RETRIES = 3;
 
-      if (!payoutRecord || !offramp.cashfreeId) {
-        console.warn("[reconcile] Skipping Cashfree retry because payout identity is incomplete.", {
-          transferId: offramp.transferId,
-          hasPayoutRecord: !!payoutRecord,
-          cashfreeId: offramp.cashfreeId,
+      if (retryCount > MAX_RETRIES) {
+        // SECURITY: Cap payout retries so failed fiat settlements escalate instead of looping silently.
+        await db.offrampTransaction.update({
+          where: { transferId: offramp.transferId },
+          data: {
+            status: "REQUIRES_REVIEW",
+            requiresReview: true,
+            retryCount,
+            lastRetryAt: new Date(),
+            failureReason: "Cashfree retry limit exceeded; manual payout review required.",
+          },
+        });
+        console.error("[reconciliation] MAX_RETRIES exceeded, escalating to review", offramp.transferId);
+        continue;
+      }
+
+      if (!canonicalOfframp?.upiId) {
+        // SECURITY: Retrying without the original UPI identifier risks sending funds to an unverifiable destination.
+        await db.offrampTransaction.update({
+          where: { transferId: offramp.transferId },
+          data: {
+            status: "REQUIRES_REVIEW",
+            requiresReview: true,
+            retryCount,
+            lastRetryAt: new Date(),
+            failureReason: "Cannot auto-retry payout because the unmasked UPI handle is unavailable.",
+          },
         });
         continue;
       }
 
-      await getPayoutStatus(offramp.transferId);
+      // BUGFIX: Do not re-poll a dead Cashfree transfer; initiate a fresh external transfer attempt.
+      const externalTransferId = `${offramp.transferId}_retry_${retryCount}`;
+      await initiateUpiPayout({
+        transferId: offramp.transferId,
+        walletAddress: offramp.walletAddress,
+        solanaSignature: offramp.solanaTx,
+        upiId: canonicalOfframp.upiId,
+        amountMicroUsdc: offramp.amountMicroUsdc,
+        inrPaise: String(offramp.amountInrPaise),
+        referralPubkey: offramp.referralPubkey,
+        externalTransferId,
+        attemptKind: "cashfree-retry",
+      });
       summary.retriedPayouts += 1;
       continue;
     }

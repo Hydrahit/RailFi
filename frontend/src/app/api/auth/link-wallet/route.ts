@@ -4,11 +4,17 @@ import { atomicLinkWallet } from "@/lib/atomic-operations";
 import { verifyWalletSignature } from "@/lib/siws";
 import { setProfileFlags } from "@/lib/offramp-store";
 import { getRefreshedWalletSessionFromRequest } from "@/lib/wallet-session-server";
+import { validateTrustedOrigin } from "@/lib/security";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
+  // SECURITY: Reject cross-origin account-linking attempts before session or database access.
+  if (!validateTrustedOrigin(request)) {
+    return NextResponse.json({ error: "Forbidden: invalid request origin" }, { status: 403 });
+  }
+
   const [session, walletSession] = await Promise.all([
     auth(),
     getRefreshedWalletSessionFromRequest(request),
@@ -94,6 +100,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     }
   }
 
+  // SECURITY: Profile trust flags are set only after the database link operation succeeds.
   await setProfileFlags(walletAddress, { googleLinked: true, walletLinked: true });
 
   return NextResponse.json({ ok: true }, { status: 200 });

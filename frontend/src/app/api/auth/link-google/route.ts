@@ -1,10 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getRefreshedWalletSessionFromRequest } from "@/lib/wallet-session-server";
+import { validateTrustedOrigin } from "@/lib/security";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
+  // SECURITY: Reject cross-origin Google-link initiation before reading wallet-session cookies.
+  if (!validateTrustedOrigin(request)) {
+    return NextResponse.json({ error: "Forbidden: invalid request origin" }, { status: 403 });
+  }
+
   const walletSession = await getRefreshedWalletSessionFromRequest(request);
   if (!walletSession) {
     return NextResponse.json({ error: "Wallet session required." }, { status: 401 });

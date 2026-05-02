@@ -6,7 +6,7 @@ import type { RelaySubmitResponse } from "@/lib/relayer/types";
 import { enforceIpRateLimit, enforceWalletRateLimit } from "@/lib/rate-limit";
 import { requireTrustedOrigin } from "@/lib/origin";
 import { PROGRAM_ID, USDC_USD_PYTH_ACCOUNT } from "@/lib/solana";
-import { buildTransferId, hashUpiId, maskUpiId, putOfframpRecord } from "@/lib/offramp-store";
+import { buildTransferId, getOfframpRecord, hashUpiId, maskUpiId, putOfframpRecord } from "@/lib/offramp-store";
 import {
   consumePreparedPayout,
   initiateUpiPayout,
@@ -206,11 +206,43 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       );
     }
 
+    // SECURITY: consumePreparedPayout uses Redis getdel so a confirmed transaction cannot trigger two fiat payouts.
     const preparedPayout = await consumePreparedPayout(serializedTransaction);
+    const derivedTransferId = buildTransferId(signature);
     let payoutTransferId: string | null = null;
 
-    if (preparedPayout) {
-      payoutTransferId = buildTransferId(signature);
+    if (!preparedPayout && policy.actionKind === "trigger_offramp") {
+      const existingRecord = await getOfframpRecord(derivedTransferId);
+      if (existingRecord) {
+        // SECURITY: If the staged payload was already consumed, return the existing payout instead of re-initiating Cashfree.
+        const body: RelaySubmitResponse = {
+          signature,
+          blockhash: transaction.recentBlockhash!,
+          lastValidBlockHeight,
+          payoutTransferId: derivedTransferId,
+          idempotent: true,
+        };
+        return NextResponse.json(body);
+      }
+      return NextResponse.json(
+        { error: "Payout session expired or already processed. Submit a new transaction." },
+        { status: 409 },
+      );
+    } else if (preparedPayout) {
+      payoutTransferId = derivedTransferId;
+      const existingRecord = await getOfframpRecord(derivedTransferId);
+      if (existingRecord) {
+        // SECURITY: Canonical record existence is the second idempotency guard before any Cashfree payout call.
+        const body: RelaySubmitResponse = {
+          signature,
+          blockhash: transaction.recentBlockhash!,
+          lastValidBlockHeight,
+          payoutTransferId: derivedTransferId,
+          idempotent: true,
+        };
+        return NextResponse.json(body);
+      }
+
       await putOfframpRecord({
         transferId: payoutTransferId,
         solanaTx: signature,
@@ -221,6 +253,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         amountInr: Number(preparedPayout.inrPaise) / 100,
         amountInrPaise: Number(preparedPayout.inrPaise),
         upiMasked: maskUpiId(preparedPayout.upiId),
+        // SECURITY: Canonical Redis record retains the original UPI for reconciliation-only fresh payout retries.
+        upiId: preparedPayout.upiId,
         upiHash: hashUpiId(preparedPayout.upiId),
         status: "ON_CHAIN_CONFIRMED",
         utr: null,

@@ -6,11 +6,17 @@ import {
   attachWalletSessionCookie,
   getRefreshedWalletSessionFromRequest,
 } from "@/lib/wallet-session-server";
+import { validateTrustedOrigin } from "@/lib/security";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
+  // SECURITY: Reject cross-origin UPI mutations before reading session cookies.
+  if (!validateTrustedOrigin(request)) {
+    return NextResponse.json({ error: "Forbidden: invalid request origin" }, { status: 403 });
+  }
+
   const session = await getRefreshedWalletSessionFromRequest(request);
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
