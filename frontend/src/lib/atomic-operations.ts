@@ -338,11 +338,21 @@ export async function atomicLinkWallet(params: {
       async (tx) => {
         const existing = await tx.user.findUnique({
           where: { walletAddress: params.walletAddress },
-          select: { id: true },
+          select: { id: true, email: true, googleLinked: true },
         });
 
         if (existing && existing.id !== params.userId) {
-          throw new Error("WALLET_TAKEN");
+          if (existing.email || existing.googleLinked) {
+            throw new Error("WALLET_TAKEN");
+          }
+
+          await tx.user.update({
+            where: { id: existing.id },
+            data: {
+              walletAddress: null,
+              walletLinked: false,
+            },
+          });
         }
 
         await tx.user.update({
