@@ -1,6 +1,7 @@
 import "server-only";
 
 import { createHash, randomUUID } from "crypto";
+import { Transaction } from "@solana/web3.js";
 import { fetchWithTimeout, TIMEOUTS } from "@/lib/fetch-with-timeout";
 import { getServerRedis } from "@/lib/upstash";
 import {
@@ -26,6 +27,7 @@ const PAYOUT_WALLET_KEY_PREFIX = "offramp:payout:wallet";
 const PREPARED_PAYOUT_TTL_SECONDS = 30 * 60;
 const PAYOUT_RECORD_TTL_SECONDS = 60 * 60 * 24 * 365 * 2;
 const CASHFREE_TOKEN_TTL_SECONDS = 25 * 60;
+const CASHFREE_TOKEN_LOCK_KEY = "cashfree:auth:lock";
 
 export type CashfreePayoutStatus =
   | "PENDING"
@@ -136,7 +138,16 @@ function payoutWalletKey(walletAddress: string): string {
 }
 
 function preparedPayoutKey(serializedTransaction: string): string {
-  const digest = createHash("sha256").update(serializedTransaction).digest("hex");
+  let stablePayload = serializedTransaction;
+  try {
+    // SECURITY: Key staged payout metadata by transaction message, not signatures, so signed relay submissions consume the original prepared payout exactly once.
+    stablePayload = Transaction.from(Buffer.from(serializedTransaction, "base64"))
+      .serializeMessage()
+      .toString("base64");
+  } catch {
+    stablePayload = serializedTransaction;
+  }
+  const digest = createHash("sha256").update(stablePayload).digest("hex");
   return `${PREPARED_PAYOUT_KEY_PREFIX}:${digest}`;
 }
 
@@ -276,28 +287,50 @@ export async function getCashfreeToken(): Promise<string> {
     return cached;
   }
 
-  const { clientId, clientSecret } = getCashfreeCredentials();
-  const response = await fetchWithTimeout(`${getCashfreeBaseUrl()}/payout/v1/authorize`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Client-Id": clientId,
-      "X-Client-Secret": clientSecret,
-    },
-    cache: "no-store",
-    timeoutMs: TIMEOUTS.cashfree,
+  // CONCURRENCY: SET NX lock prevents simultaneous cold-cache Cashfree token refreshes from invalidating each other.
+  const lockAcquired = await redis.set(CASHFREE_TOKEN_LOCK_KEY, "1", {
+    nx: true,
+    ex: 15,
   });
 
-  const payload = (await response.json().catch(() => ({}))) as CashfreeAuthorizeResponse;
-  const token = payload.data?.token?.trim();
-  if (!response.ok || !token) {
-    throw new Error(
-      payload.message ?? `Cashfree authorization failed with status ${response.status}.`,
-    );
+  if (!lockAcquired) {
+    for (let i = 0; i < 5; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 300 * (i + 1)));
+      const retried = await redis.get<string>(CASHFREE_TOKEN_CACHE_KEY);
+      if (retried) {
+        return retried;
+      }
+    }
+    throw new Error("Cashfree token refresh lock timeout - upstream may be degraded");
   }
 
-  await redis.setex(CASHFREE_TOKEN_CACHE_KEY, CASHFREE_TOKEN_TTL_SECONDS, token);
-  return token;
+  try {
+    const { clientId, clientSecret } = getCashfreeCredentials();
+    const response = await fetchWithTimeout(`${getCashfreeBaseUrl()}/payout/v1/authorize`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Client-Id": clientId,
+        "X-Client-Secret": clientSecret,
+      },
+      cache: "no-store",
+      timeoutMs: TIMEOUTS.cashfree,
+    });
+
+    const payload = (await response.json().catch(() => ({}))) as CashfreeAuthorizeResponse;
+    const token = payload.data?.token?.trim();
+    if (!response.ok || !token) {
+      throw new Error(
+        payload.message ?? `Cashfree authorization failed with status ${response.status}.`,
+      );
+    }
+
+    await redis.setex(CASHFREE_TOKEN_CACHE_KEY, CASHFREE_TOKEN_TTL_SECONDS, token);
+    return token;
+  } finally {
+    // CONCURRENCY: Always release the refresh lock so later payouts can recover after errors.
+    await redis.del(CASHFREE_TOKEN_LOCK_KEY);
+  }
 }
 
 export async function stagePreparedPayout(
@@ -315,13 +348,10 @@ export async function consumePreparedPayout(
 ): Promise<PreparedPayoutMetadata | null> {
   const redis = getRedis();
   const key = preparedPayoutKey(serializedTransaction);
-  const prepared = await redis.get<PreparedPayoutMetadata>(key);
-  if (!prepared) {
-    return null;
-  }
-
-  await redis.del(key);
-  return prepared;
+  // SECURITY: Atomic getdel closes the double-payout race between reading and deleting staged payout metadata.
+  return (await (redis as typeof redis & {
+    getdel<T>(key: string): Promise<T | null>;
+  }).getdel<PreparedPayoutMetadata>(key)) ?? null;
 }
 
 export function createPayoutTransferId(): string {
@@ -363,6 +393,8 @@ export async function recordPayoutQueued(args: {
       amountInr: Number(paiseToInrString(args.prepared.inrPaise)),
       amountInrPaise: Number(args.prepared.inrPaise),
       upiMasked: maskUpiId(args.prepared.upiId),
+      // SECURITY: Keep the unmasked UPI only in the canonical Redis record so reconciliation can retry failed payouts.
+      upiId: args.prepared.upiId,
       upiHash: null,
       status: "PAYOUT_PENDING",
       utr: null,

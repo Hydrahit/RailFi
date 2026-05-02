@@ -34,4 +34,5 @@ export interface RelaySubmitResponse {
   blockhash: string;
   lastValidBlockHeight: number;
   payoutTransferId?: string | null;
+  idempotent?: boolean;
 }

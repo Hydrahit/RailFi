@@ -5,8 +5,29 @@ import { PrismaAdapter } from "@auth/prisma-adapter";
 import { db } from "@/lib/db";
 import { verifyWalletSignature } from "@/lib/siws";
 import { setProfileFlags } from "@/lib/offramp-store";
+import { enforceAuthorizeWalletRateLimit } from "@/lib/auth";
 
 const useAdapter = !!process.env.DATABASE_URL;
+const SIWS_MAX_AGE_MS = 5 * 60 * 1000;
+
+function isFreshSiwsMessage(message: string): boolean {
+  try {
+    const parsed = JSON.parse(message) as { issuedAt?: unknown };
+    const issuedAtValue = parsed.issuedAt;
+    const issuedAt =
+      typeof issuedAtValue === "string"
+        ? Date.parse(issuedAtValue)
+        : typeof issuedAtValue === "number"
+          ? issuedAtValue
+          : Number.NaN;
+    const now = Date.now();
+
+    // SECURITY: A valid SIWS signature is replayable unless its issuedAt is present and tightly time-bound.
+    return Number.isFinite(issuedAt) && issuedAt <= now && now - issuedAt <= SIWS_MAX_AGE_MS;
+  } catch {
+    return false;
+  }
+}
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
   ...(useAdapter ? { adapter: PrismaAdapter(db) } : {}),
@@ -28,6 +49,9 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       async authorize(credentials) {
         const walletAddress =
           typeof credentials?.walletAddress === "string" ? credentials.walletAddress.trim() : "";
+        // SECURITY: Rate-limit by wallet before signature verification to blunt credential brute-force attempts.
+        await enforceAuthorizeWalletRateLimit(walletAddress || undefined);
+
         const message = typeof credentials?.message === "string" ? credentials.message.trim() : "";
         const signature =
           typeof credentials?.signature === "string" ? credentials.signature.trim() : "";
@@ -40,11 +64,15 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           return null;
         }
 
-        await setProfileFlags(walletAddress, { walletLinked: true });
+        if (!isFreshSiwsMessage(message)) {
+          return null;
+        }
 
         if (useAdapter) {
           const existing = await db.user.findUnique({ where: { walletAddress } });
           if (existing) {
+            // SECURITY: Trust flags are written only after the backing user record has been confirmed.
+            await setProfileFlags(walletAddress, { walletLinked: true });
             return {
               id: existing.id,
               email: existing.email,
@@ -65,6 +93,8 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
             },
           });
 
+          // SECURITY: Trust flags are written only after the user create transaction succeeds.
+          await setProfileFlags(walletAddress, { walletLinked: true });
           return {
             id: created.id,
             email: created.email,
@@ -77,6 +107,8 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           };
         }
 
+        // SECURITY: JWT-only mode has no DB commit path, so set the flag only after signature freshness passes.
+        await setProfileFlags(walletAddress, { walletLinked: true });
         return {
           id: walletAddress,
           walletAddress,

@@ -131,6 +131,17 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ error: "Wallet session signature is invalid." }, { status: 401 });
     }
 
+    // SECURITY: Treat signedAt as the SIWS issuedAt equivalent so a valid stale signature cannot be replayed before nonce consumption.
+    const SIWS_MAX_AGE_MS = 5 * 60 * 1000;
+    const issuedAt = signedAt;
+    const now = Date.now();
+    if (!Number.isFinite(issuedAt) || Math.abs(now - issuedAt) > SIWS_MAX_AGE_MS) {
+      return NextResponse.json(
+        { error: "Signature expired or not yet valid. Please sign again." },
+        { status: 401 },
+      );
+    }
+
     const nonceAccepted = await consumeWalletSessionNonce(walletAddress, nonce);
     if (!nonceAccepted) {
       return NextResponse.json(

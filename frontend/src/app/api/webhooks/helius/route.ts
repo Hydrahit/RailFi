@@ -14,6 +14,7 @@ import {
 } from "@/lib/wallet-session-server";
 import { enforceWalletRateLimit } from "@/lib/rate-limit";
 import { enforceIpRateLimit } from "@/lib/rate-limit";
+import { getServerRedis } from "@/lib/upstash";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -138,6 +139,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     console.log(
       `[Helius Webhook] Processed offramp: ${record.requestId} from ${record.walletAddress}`,
     );
+
+    const listKey = `helius:events:${walletAddress}`;
+    const redis = getServerRedis("helius wallet event log");
+    // RESILIENCE: Bounded per-wallet event log prevents Redis memory exhaustion on high-volume wallets.
+    await redis.lpush(listKey, JSON.stringify(record));
+    await redis.ltrim(listKey, 0, 499);
+    await redis.expire(listKey, 60 * 60 * 24 * 30);
 
     if (!internalApiToken) {
       await upsertWebhookRecord({

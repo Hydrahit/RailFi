@@ -6,6 +6,7 @@ import { POST as relayPreparePost } from "@/app/api/relay/prepare/route";
 import { POST as relaySubmitPost } from "@/app/api/relay/submit/route";
 import { atomicPayoutStateTransition } from "@/lib/atomic-operations";
 import { mirrorDodoSettlementAudit } from "@/lib/dodo-audit";
+import { requireTrustedOrigin } from "@/lib/origin";
 import { acquireLock, refreshLock, releaseLock } from "@/lib/redis-lock";
 import { getServerRedis } from "@/lib/upstash";
 import { getRefreshedWalletSessionFromRequest } from "@/lib/wallet-session-server";
@@ -16,6 +17,8 @@ export const runtime = "nodejs";
 
 interface ExecuteRequestBody {
   dodoPaymentId: string;
+  serializedTransaction?: string;
+  lastValidBlockHeight?: number;
 }
 
 interface RelaySuccessPayload {
@@ -151,10 +154,10 @@ async function callRelayPrepare(
 
 async function callRelaySubmit(
   request: Request,
-  prepared: RelayPrepareResponse,
+  signedSubmission: RelayPrepareResponse,
 ): Promise<RelaySubmitResponse | Response> {
   const relayResponse = await relaySubmitPost(
-    buildInternalRequest(request, "/api/relay/submit", prepared),
+    buildInternalRequest(request, "/api/relay/submit", signedSubmission),
   );
   const payload = await parseJsonResponse<RelaySubmitResponse & RelaySuccessPayload>(relayResponse);
 
@@ -182,6 +185,11 @@ async function callRelaySubmit(
 }
 
 export async function POST(request: NextRequest): Promise<Response> {
+  const originViolation = requireTrustedOrigin(request);
+  if (originViolation) {
+    return originViolation;
+  }
+
   const [session, walletSession] = await Promise.all([
     auth(),
     getRefreshedWalletSessionFromRequest(request),
@@ -285,6 +293,32 @@ export async function POST(request: NextRequest): Promise<Response> {
       );
     }
 
+    const signedSubmission =
+      typeof body.serializedTransaction === "string" &&
+      body.serializedTransaction.trim() &&
+      Number.isInteger(body.lastValidBlockHeight) &&
+      Number(body.lastValidBlockHeight) > 0
+        ? {
+            serializedTransaction: body.serializedTransaction.trim(),
+            lastValidBlockHeight: Number(body.lastValidBlockHeight),
+          }
+        : null;
+
+    if (!signedSubmission) {
+      const prepared = await callRelayPrepare(request, intent);
+      if (prepared instanceof Response) {
+        return prepared;
+      }
+
+      // SECURITY: Dodo execution requires the user's wallet signature; return a signable relay payload instead of server-submitting a partially signed transaction.
+      return Response.json({
+        status: "SIGNATURE_REQUIRED",
+        serializedTransaction: prepared.serializedTransaction,
+        lastValidBlockHeight: prepared.lastValidBlockHeight,
+        message: "Wallet signature required before settlement submission.",
+      });
+    }
+
     const executingIntent: DodoOfframpIntent = {
       ...intent,
       status: "RELAY_EXECUTING",
@@ -300,35 +334,6 @@ export async function POST(request: NextRequest): Promise<Response> {
         error,
       });
     });
-
-    const lockStillOwnedBeforePrepare = await refreshLock(
-      lockKey,
-      lockToken,
-      EXECUTION_LOCK_TTL_SECONDS,
-    );
-    if (!lockStillOwnedBeforePrepare) {
-      await restoreReadyForRelayIntent(
-        intentKey,
-        intent,
-        lockToken,
-        "Execution lock lost before relay preparation.",
-      );
-      return Response.json(
-        { error: "Execution lock was lost before relay preparation completed." },
-        { status: 409 },
-      );
-    }
-
-    const prepared = await callRelayPrepare(request, executingIntent);
-    if (prepared instanceof Response) {
-      await restoreReadyForRelayIntent(
-        intentKey,
-        intent,
-        lockToken,
-        "Relay preparation failed.",
-      );
-      return prepared;
-    }
 
     const lockStillOwnedBeforeSubmit = await refreshLock(
       lockKey,
@@ -348,7 +353,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       );
     }
 
-    const submitted = await callRelaySubmit(request, prepared);
+    const submitted = await callRelaySubmit(request, signedSubmission);
     if (submitted instanceof Response) {
       const submittedPayload = await parseJsonResponse<RelaySuccessPayload>(submitted.clone());
       await restoreReadyForRelayIntent(

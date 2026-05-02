@@ -4,11 +4,36 @@ import { atomicLinkWallet } from "@/lib/atomic-operations";
 import { verifyWalletSignature } from "@/lib/siws";
 import { setProfileFlags } from "@/lib/offramp-store";
 import { getRefreshedWalletSessionFromRequest } from "@/lib/wallet-session-server";
+import { validateTrustedOrigin } from "@/lib/security";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+const SIWS_MAX_AGE_MS = 5 * 60 * 1000;
+
+function parseIssuedAt(message: string): number | null {
+  try {
+    const parsedMessage = JSON.parse(message) as { issuedAt?: unknown };
+    const issuedAtValue = parsedMessage.issuedAt;
+    const issuedAtTimestamp =
+      typeof issuedAtValue === "string"
+        ? Date.parse(issuedAtValue)
+        : typeof issuedAtValue === "number"
+          ? issuedAtValue
+          : Number.NaN;
+
+    return Number.isFinite(issuedAtTimestamp) ? issuedAtTimestamp : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function POST(request: NextRequest): Promise<NextResponse> {
+  // SECURITY: Reject cross-origin account-linking attempts before session or database access.
+  if (!validateTrustedOrigin(request)) {
+    return NextResponse.json({ error: "Forbidden: invalid request origin" }, { status: 403 });
+  }
+
   const [session, walletSession] = await Promise.all([
     auth(),
     getRefreshedWalletSessionFromRequest(request),
@@ -38,27 +63,17 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ error: "Invalid wallet signature." }, { status: 401 });
     }
 
-    try {
-      const parsedMessage = JSON.parse(message) as { issuedAt?: unknown };
-      const issuedAtValue = parsedMessage.issuedAt;
-      const issuedAtTimestamp =
-        typeof issuedAtValue === "string"
-          ? Date.parse(issuedAtValue)
-          : typeof issuedAtValue === "number"
-            ? issuedAtValue
-            : Number.NaN;
-
-      if (
-        Number.isFinite(issuedAtTimestamp) &&
-        Date.now() - issuedAtTimestamp > 5 * 60 * 1000
-      ) {
-        return NextResponse.json(
-          { error: "Signature expired. Please sign again." },
-          { status: 401 },
-        );
-      }
-    } catch {
-      // Backward compatibility: allow legacy non-JSON messages.
+    const issuedAtTimestamp = parseIssuedAt(message);
+    const now = Date.now();
+    // SECURITY: Wallet linking must reject replayable, malformed, future, or stale SIWS signatures.
+    if (
+      issuedAtTimestamp === null ||
+      Math.abs(now - issuedAtTimestamp) > SIWS_MAX_AGE_MS
+    ) {
+      return NextResponse.json(
+        { error: "Signature expired or not yet valid. Please sign again." },
+        { status: 401 },
+      );
     }
 
     walletAddress = requestedWalletAddress;
@@ -94,6 +109,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     }
   }
 
+  // SECURITY: Profile trust flags are set only after the database link operation succeeds.
   await setProfileFlags(walletAddress, { googleLinked: true, walletLinked: true });
 
   return NextResponse.json({ ok: true }, { status: 200 });

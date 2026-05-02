@@ -2,16 +2,17 @@ import crypto from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import {
   extractCashfreeStatus,
-  processCashfreeWebhookPayload,
   extractCashfreeEventType,
   extractCashfreeTransferId,
   extractCashfreeUtr,
 } from "@/lib/cashfree-webhooks";
+import { processCashfreeWebhookPayload } from "@/lib/cashfree-webhook-processor";
 import {
   atomicProcessCashfreeWebhook,
   isAlreadyProcessed,
 } from "@/lib/atomic-operations";
 import { mapCashfreeStatusToOfframpStatus, writeOfframpDeadLetter } from "@/lib/offramp-store";
+import { getServerRedis } from "@/lib/upstash";
 import { publishWorkerJob, isQstashConfigured } from "@/lib/qstash";
 import {
   createRetryJob,
@@ -43,6 +44,50 @@ function verifySignature(rawBody: string, signature: string | null): boolean {
   return timingSafeMatches(digestHex, signature) || timingSafeMatches(digestBase64, signature);
 }
 
+function extractCashfreeEventTimestamp(payload: Record<string, unknown>, rawBody: string): string {
+  const candidates = [
+    payload.eventTimestamp,
+    payload.event_time,
+    payload.eventTime,
+    (payload.data as Record<string, unknown> | undefined)?.eventTimestamp,
+    (payload.data as Record<string, unknown> | undefined)?.event_time,
+    (payload.data as Record<string, unknown> | undefined)?.eventTime,
+  ];
+  const found = candidates.find((value) => typeof value === "string" || typeof value === "number");
+  if (typeof found === "string" && found.trim()) {
+    return found.trim();
+  }
+  if (typeof found === "number" && Number.isFinite(found)) {
+    return String(found);
+  }
+  return crypto.createHash("sha256").update(rawBody).digest("hex").slice(0, 16);
+}
+
+async function writeRecoverableDlq(transferId: string, rawBody: string, error: unknown): Promise<void> {
+  const redis = getServerRedis("cashfree webhook dlq");
+  try {
+    // CRITICAL: Persist failed webhook payloads for operator replay instead of losing payout state.
+    await redis.set(`cashfree:webhook:dead:${transferId}`, JSON.stringify({ raw: rawBody, error: String(error), ts: Date.now() }), {
+      ex: 60 * 60 * 24 * 30,
+    });
+    await redis.set(`offramp:dlq:${transferId}`, JSON.stringify({ raw: rawBody, receivedAt: Date.now() }), {
+      ex: 60 * 60 * 24 * 30,
+    });
+  } catch (dlqWriteErr) {
+    // CRITICAL: DLQ write failure is a data-loss event; log the full payload for recovery from log drains.
+    console.error(
+      JSON.stringify({
+        severity: "CRITICAL",
+        event: "CASHFREE_DLQ_WRITE_FAILED",
+        transferId,
+        rawPayload: rawBody,
+        error: String(dlqWriteErr),
+        timestamp: new Date().toISOString(),
+      }),
+    );
+  }
+}
+
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const rawBody = await request.text();
   const signature = request.headers.get("x-webhook-signature")?.trim() ?? null;
@@ -64,28 +109,40 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   const eventType = extractCashfreeEventType(payload) ?? "UNKNOWN_EVENT";
   const transferId = extractCashfreeTransferId(payload);
+  const eventTimestamp = extractCashfreeEventTimestamp(payload, rawBody);
 
   if (!transferId) {
     console.warn("[cashfree-webhook] Missing transferId.", { eventType });
     return NextResponse.json({ received: true }, { status: 200 });
   }
 
-  const eventKey = createCashfreeEventKey(transferId, eventType, rawBody);
-  const inbox = await ingestWebhookEvent({
-    provider: "cashfree",
-    sourcePath: "/api/webhooks/cashfree",
-    eventKey,
-    eventType,
-    payload: payload as never,
-  });
+  const redis = getServerRedis("cashfree webhook idempotency");
+  // SECURITY: Idempotency rejects duplicate Cashfree deliveries before any payout-state mutation.
+  const eventKey = `cashfree:webhook:event:${transferId}:${eventTimestamp}`;
+  const alreadyProcessed = await redis.get(eventKey);
+  if (alreadyProcessed) {
+    return NextResponse.json({ ok: true, skipped: true }, { status: 200 });
+  }
+
+  const inboxEventKey = createCashfreeEventKey(transferId, eventType, rawBody);
+  let inbox: Awaited<ReturnType<typeof ingestWebhookEvent>> | null = null;
+  let shouldMarkEventProcessed = false;
 
   try {
+    inbox = await ingestWebhookEvent({
+      provider: "cashfree",
+      sourcePath: "/api/webhooks/cashfree",
+      eventKey: inboxEventKey,
+      eventType,
+      payload: payload as never,
+    });
+
     if (isQstashConfigured() && inbox) {
       await publishWorkerJob(
         "cashfree-webhook",
         {
           inboxId: inbox.id,
-          eventKey,
+          eventKey: inboxEventKey,
           transferId,
         },
         { retries: 5 },
@@ -97,6 +154,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         inboxId: inbox.id,
         payload: { provider: "cashfree", transferId, eventType },
       });
+      shouldMarkEventProcessed = true;
     } else if (inbox) {
       const rawStatus = extractCashfreeStatus(payload) ?? "UNKNOWN";
       const mappedStatus = mapCashfreeStatusToOfframpStatus(rawStatus);
@@ -114,6 +172,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         console.log(
           `[cashfree-webhook] Idempotent replay for ${transferId} - returning cached 200`,
         );
+        // SECURITY: Cached DB idempotency means this delivery is terminal and safe to dedupe in Redis.
+        await redis.set(eventKey, "PROCESSED", { ex: 60 * 60 * 24 * 7 });
         return NextResponse.json({ received: true, replayed: true });
       }
 
@@ -128,6 +188,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
       if (!result.ok) {
         if (result.reason === "already_processed") {
+          // SECURITY: Atomic layer confirmed this webhook was already terminally processed.
+          await redis.set(eventKey, "PROCESSED", { ex: 60 * 60 * 24 * 7 });
           return NextResponse.json({ received: true });
         }
         if (result.reason === "record_not_found") {
@@ -137,25 +199,40 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
             "cashfree",
             "record_not_found_atomic",
           );
+          await markWebhookFailed(inbox.id, "record_not_found_atomic", true);
+          // SECURITY: Missing canonical records are intentionally dead-lettered and should not retry forever.
+          await redis.set(eventKey, "PROCESSED", { ex: 60 * 60 * 24 * 7 });
           return NextResponse.json({ received: true, queued: "dlq" });
         }
         console.error("[cashfree-webhook] Atomic operation failed:", result.error);
         return NextResponse.json({ error: "Processing failed" }, { status: 500 });
       }
+
+      shouldMarkEventProcessed = true;
     } else {
       await processCashfreeWebhookPayload(payload, rawBody);
+      shouldMarkEventProcessed = true;
     }
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to ingest Cashfree webhook.";
     if (inbox) {
-      await markWebhookFailed(inbox.id, message);
+      await markWebhookFailed(inbox.id, message, true);
     }
+    await writeRecoverableDlq(transferId, rawBody, error);
     console.error("[cashfree-webhook] Failed to ingest webhook", {
       transferId,
       eventType,
       error,
     });
-    return NextResponse.json({ error: "Webhook ingestion failed" }, { status: 500 });
+    // SECURITY: This path deliberately dead-letters the event for operator replay, so the delivery is terminal.
+    await redis.set(eventKey, "PROCESSED", { ex: 60 * 60 * 24 * 7 });
+    return NextResponse.json({ ok: false, state: "DEAD_LETTERED" }, { status: 200 });
+
+  }
+
+  if (shouldMarkEventProcessed) {
+    // SECURITY: Mark Redis dedupe only after successful processing, enqueue, or intentional dead-lettering.
+    await redis.set(eventKey, "PROCESSED", { ex: 60 * 60 * 24 * 7 });
   }
 
   return NextResponse.json({ received: true }, { status: 200 });
