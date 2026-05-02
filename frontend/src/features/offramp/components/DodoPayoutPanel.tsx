@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useWallet } from "@solana/wallet-adapter-react";
+import { Transaction } from "@solana/web3.js";
 import {
   AlertCircle,
   ArrowUpRight,
@@ -33,6 +35,8 @@ interface DodoExecuteResponse {
   solanaTx?: string | null;
   status: string;
   message?: string;
+  serializedTransaction?: string;
+  lastValidBlockHeight?: number;
 }
 
 interface DodoStatusResponse {
@@ -99,6 +103,7 @@ function isSuccessStatus(status: DodoStatusResponse | null): boolean {
 
 export function DodoPayoutPanel() {
   const { showToast } = useToast();
+  const { signTransaction } = useWallet();
   const {
     authState,
     isRefreshing,
@@ -305,7 +310,7 @@ export function DodoPayoutPanel() {
           dodoPaymentId: dodoPaymentId.trim(),
         }),
       });
-      const payload = await parseJson<DodoExecuteResponse | ApiErrorPayload>(response);
+      let payload = await parseJson<DodoExecuteResponse | ApiErrorPayload>(response);
 
       if (!response.ok) {
         throw new Error(getApiErrorMessage(payload, "Unable to execute Dodo payout."));
@@ -313,6 +318,42 @@ export function DodoPayoutPanel() {
 
       if (!payload || !("status" in payload)) {
         throw new Error("Dodo execute returned an invalid response.");
+      }
+
+      if (payload.status === "SIGNATURE_REQUIRED") {
+        if (!payload.serializedTransaction || !payload.lastValidBlockHeight) {
+          throw new Error("Dodo execute did not return a signable transaction.");
+        }
+        if (!signTransaction) {
+          throw new Error("Wallet does not support transaction signing.");
+        }
+
+        const preparedTransaction = Transaction.from(
+          Buffer.from(payload.serializedTransaction, "base64"),
+        );
+        const signedTransaction = await signTransaction(preparedTransaction);
+        const submitResponse = await fetch("/api/dodo/execute", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          credentials: "include",
+          body: JSON.stringify({
+            dodoPaymentId: dodoPaymentId.trim(),
+            serializedTransaction: Buffer.from(signedTransaction.serialize()).toString("base64"),
+            lastValidBlockHeight: payload.lastValidBlockHeight,
+          }),
+        });
+        const submitPayload = await parseJson<DodoExecuteResponse | ApiErrorPayload>(submitResponse);
+
+        if (!submitResponse.ok) {
+          throw new Error(getApiErrorMessage(submitPayload, "Unable to submit signed Dodo payout."));
+        }
+        if (!submitPayload || !("status" in submitPayload)) {
+          throw new Error("Dodo signed execute returned an invalid response.");
+        }
+
+        payload = submitPayload;
       }
 
       setExecution(payload);

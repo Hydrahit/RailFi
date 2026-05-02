@@ -3,6 +3,7 @@ import { NextRequest } from "next/server";
 import { auth } from "../../../../../auth";
 import { fetchWithTimeout, TIMEOUTS } from "@/lib/fetch-with-timeout";
 import { getUsdInrRate } from "@/lib/fxrate";
+import { requireTrustedOrigin } from "@/lib/origin";
 import { getServerRedis } from "@/lib/upstash";
 import { getRefreshedWalletSessionFromRequest } from "@/lib/wallet-session-server";
 import type { DodoOfframpIntent } from "@/types/dodo";
@@ -125,6 +126,11 @@ async function fetchCoinGeckoUsdcPrice(): Promise<number> {
 }
 
 export async function POST(request: NextRequest): Promise<Response> {
+  const originViolation = requireTrustedOrigin(request);
+  if (originViolation) {
+    return originViolation;
+  }
+
   const [session, walletSession] = await Promise.all([
     auth(),
     getRefreshedWalletSessionFromRequest(request),

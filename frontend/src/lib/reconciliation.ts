@@ -3,7 +3,7 @@ import "server-only";
 import { Connection } from "@solana/web3.js";
 import { atomicReconcileAction } from "@/lib/atomic-operations";
 import { db } from "@/lib/db";
-import { getOfframpRecord } from "@/lib/offramp-store";
+import { getOfframpRecord, writeOfframpDeadLetter } from "@/lib/offramp-store";
 import {
   initiateUpiPayout,
   getPayoutStatus,
@@ -209,6 +209,18 @@ export async function runReconciliation(): Promise<ReconciliationSummary> {
 
       if (!canonicalOfframp?.upiId) {
         // SECURITY: Retrying without the original UPI identifier risks sending funds to an unverifiable destination.
+        await writeOfframpDeadLetter(
+          offramp.transferId,
+          JSON.stringify({
+            transferId: offramp.transferId,
+            cashfreeId: offramp.cashfreeId,
+            status: offramp.status,
+            reason: "missing_unmasked_upi_for_retry",
+            recordedAt: new Date().toISOString(),
+          }),
+          "reconciliation",
+          "missing_unmasked_upi_for_retry",
+        );
         await db.offrampTransaction.update({
           where: { transferId: offramp.transferId },
           data: {

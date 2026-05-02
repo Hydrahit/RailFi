@@ -1,6 +1,7 @@
 import "server-only";
 
 import { createHash, randomUUID } from "crypto";
+import { Transaction } from "@solana/web3.js";
 import { fetchWithTimeout, TIMEOUTS } from "@/lib/fetch-with-timeout";
 import { getServerRedis } from "@/lib/upstash";
 import {
@@ -137,7 +138,16 @@ function payoutWalletKey(walletAddress: string): string {
 }
 
 function preparedPayoutKey(serializedTransaction: string): string {
-  const digest = createHash("sha256").update(serializedTransaction).digest("hex");
+  let stablePayload = serializedTransaction;
+  try {
+    // SECURITY: Key staged payout metadata by transaction message, not signatures, so signed relay submissions consume the original prepared payout exactly once.
+    stablePayload = Transaction.from(Buffer.from(serializedTransaction, "base64"))
+      .serializeMessage()
+      .toString("base64");
+  } catch {
+    stablePayload = serializedTransaction;
+  }
+  const digest = createHash("sha256").update(stablePayload).digest("hex");
   return `${PREPARED_PAYOUT_KEY_PREFIX}:${digest}`;
 }
 

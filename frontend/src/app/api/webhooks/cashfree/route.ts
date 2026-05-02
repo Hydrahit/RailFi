@@ -126,6 +126,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   const inboxEventKey = createCashfreeEventKey(transferId, eventType, rawBody);
   let inbox: Awaited<ReturnType<typeof ingestWebhookEvent>> | null = null;
+  let shouldMarkEventProcessed = false;
 
   try {
     inbox = await ingestWebhookEvent({
@@ -153,6 +154,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         inboxId: inbox.id,
         payload: { provider: "cashfree", transferId, eventType },
       });
+      shouldMarkEventProcessed = true;
     } else if (inbox) {
       const rawStatus = extractCashfreeStatus(payload) ?? "UNKNOWN";
       const mappedStatus = mapCashfreeStatusToOfframpStatus(rawStatus);
@@ -170,6 +172,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         console.log(
           `[cashfree-webhook] Idempotent replay for ${transferId} - returning cached 200`,
         );
+        // SECURITY: Cached DB idempotency means this delivery is terminal and safe to dedupe in Redis.
+        await redis.set(eventKey, "PROCESSED", { ex: 60 * 60 * 24 * 7 });
         return NextResponse.json({ received: true, replayed: true });
       }
 
@@ -184,6 +188,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
       if (!result.ok) {
         if (result.reason === "already_processed") {
+          // SECURITY: Atomic layer confirmed this webhook was already terminally processed.
+          await redis.set(eventKey, "PROCESSED", { ex: 60 * 60 * 24 * 7 });
           return NextResponse.json({ received: true });
         }
         if (result.reason === "record_not_found") {
@@ -193,18 +199,24 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
             "cashfree",
             "record_not_found_atomic",
           );
+          await markWebhookFailed(inbox.id, "record_not_found_atomic", true);
+          // SECURITY: Missing canonical records are intentionally dead-lettered and should not retry forever.
+          await redis.set(eventKey, "PROCESSED", { ex: 60 * 60 * 24 * 7 });
           return NextResponse.json({ received: true, queued: "dlq" });
         }
         console.error("[cashfree-webhook] Atomic operation failed:", result.error);
         return NextResponse.json({ error: "Processing failed" }, { status: 500 });
       }
+
+      shouldMarkEventProcessed = true;
     } else {
       await processCashfreeWebhookPayload(payload, rawBody);
+      shouldMarkEventProcessed = true;
     }
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to ingest Cashfree webhook.";
     if (inbox) {
-      await markWebhookFailed(inbox.id, message);
+      await markWebhookFailed(inbox.id, message, true);
     }
     await writeRecoverableDlq(transferId, rawBody, error);
     console.error("[cashfree-webhook] Failed to ingest webhook", {
@@ -212,9 +224,14 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       eventType,
       error,
     });
+    // SECURITY: This path deliberately dead-letters the event for operator replay, so the delivery is terminal.
+    await redis.set(eventKey, "PROCESSED", { ex: 60 * 60 * 24 * 7 });
     return NextResponse.json({ ok: false, state: "DEAD_LETTERED" }, { status: 200 });
-  } finally {
-    // SECURITY: Terminal marker prevents webhook events from staying forever in a RECEIVED limbo state.
+
+  }
+
+  if (shouldMarkEventProcessed) {
+    // SECURITY: Mark Redis dedupe only after successful processing, enqueue, or intentional dead-lettering.
     await redis.set(eventKey, "PROCESSED", { ex: 60 * 60 * 24 * 7 });
   }
 
