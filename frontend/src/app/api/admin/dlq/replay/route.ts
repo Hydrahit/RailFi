@@ -71,7 +71,16 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   }
 
   const redis = getServerRedis("dlq replay");
-  const keys = await redis.keys("offramp:dlq:*");
-  const liveKeys = (keys as string[]).filter((key) => !key.endsWith(":replayed"));
+  const liveKeys: string[] = [];
+  let cursor = "0";
+  do {
+    const [nextCursor, keys] = await redis.scan(cursor, {
+      match: "offramp:dlq:*",
+      count: 100,
+    });
+    liveKeys.push(...keys.filter((key) => !key.endsWith(":replayed")));
+    cursor = nextCursor;
+  } while (cursor !== "0");
+
   return NextResponse.json({ count: liveKeys.length, keys: liveKeys });
 }
