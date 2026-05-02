@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { signIn } from "../../../../../auth";
 import { getRefreshedWalletSessionFromRequest } from "@/lib/wallet-session-server";
 import { validateTrustedOrigin } from "@/lib/security";
 
@@ -18,7 +19,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   const body = (await request.json().catch(() => null)) as { callbackUrl?: string } | null;
   const callbackUrl = body?.callbackUrl?.trim() || "/profile";
-  const url = new URL("/api/auth/signin/google", request.url);
-  url.searchParams.set("callbackUrl", callbackUrl);
-  return NextResponse.json({ redirectUrl: url.toString() }, { status: 200 });
+  const redirectUrl = await signIn("google", {
+    redirect: false,
+    redirectTo: callbackUrl,
+  });
+  return NextResponse.json({ redirectUrl: String(redirectUrl) }, { status: 200 });
 }

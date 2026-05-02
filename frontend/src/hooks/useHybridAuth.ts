@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname } from "next/navigation";
+import { signIn as nextAuthSignIn } from "next-auth/react";
 import { useWalletSession } from "@/components/WalletSessionProvider";
 
 export interface HybridAuthState {
@@ -156,9 +157,7 @@ export function useHybridAuth() {
         return;
       }
 
-      const url = new URL("/api/auth/signin/google", window.location.origin);
-      url.searchParams.set("callbackUrl", callbackUrl);
-      window.location.href = url.toString();
+      await nextAuthSignIn("google", { redirectTo: callbackUrl });
     },
     [pathname, sessionWallet],
   );
